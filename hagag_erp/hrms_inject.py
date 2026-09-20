@@ -27,6 +27,17 @@ def tags():
     return a + b
 
 
+def rewrite(html):
+    m = ver("manifest/manifest.webmanifest")
+    new = "/assets/hagag_erp/manifest/manifest.webmanifest?v=" + m
+    old = "/assets/hrms/frontend/manifest.webmanifest"
+    html = html.replace(old, new)
+    html = html.replace("<title>Frappe HR</title>", "<title>حجاج HR</title>")
+    t = 'apple-mobile-web-app-title" content="'
+    html = html.replace(t + "Frappe HR", t + "حجاج HR")
+    return html.replace("</head>", tags() + "</head>", 1)
+
+
 def inject(response, request):
     try:
         if not request.path.startswith("/hrms"):
@@ -36,6 +47,6 @@ def inject(response, request):
         html = response.get_data(as_text=True)
         if "hagag_hrms.css" in html or "</head>" not in html:
             return
-        response.set_data(html.replace("</head>", tags() + "</head>", 1))
+        response.set_data(rewrite(html))
     except Exception:
         frappe.logger("hagag_erp").exception("hrms inject failed")

@@ -70,3 +70,34 @@ body {
         font-size: 25px;
     }
 }
+
+/* HRMS Vue app (/hrms) */
+form.flex-col button {
+    background-color: var(--hagag-primary) !important;
+    color: #fff !important;
+    border-radius: 10px !important;
+}
+
+form.flex-col button:hover,
+form.flex-col button:focus {
+    background-color: var(--hagag-primary-dark) !important;
+}
+
+form.flex-col button:disabled {
+    background-color: var(--hagag-primary-dark) !important;
+    opacity: .7;
+}
+
+form.flex-col input {
+    border-radius: 10px !important;
+}
+
+form.flex-col input:focus {
+    border-color: var(--hagag-primary) !important;
+    box-shadow: 0 0 0 2px rgba(217,119,6,.15) !important;
+}
+
+.text-3xl.font-semibold {
+    color: var(--hagag-text);
+    font-weight: 700;
+}

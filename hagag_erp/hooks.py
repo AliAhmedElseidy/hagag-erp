@@ -262,3 +262,5 @@ app_include_js = "/assets/hagag_erp/js/hagag_hrms.js"
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
 
+
+after_request = ["hagag_erp.hrms_inject.inject"]

@@ -1,0 +1,7 @@
+:root {
+    --hagag-brand: #d97706;
+}
+
+.hagag-brand {
+    color: var(--hagag-brand);
+}

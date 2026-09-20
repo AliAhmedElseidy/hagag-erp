@@ -25,8 +25,8 @@ app_license = "mit"
 # ------------------
 
 # include js, css files in header of desk.html
-# app_include_css = "/assets/hagag_erp/css/hagag_erp.css"
-# app_include_js = "/assets/hagag_erp/js/hagag_erp.js"
+app_include_css = "/assets/hagag_erp/css/hagag_hrms.css"
+app_include_js = "/assets/hagag_erp/js/hagag_hrms.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/hagag_erp/css/hagag_erp.css"

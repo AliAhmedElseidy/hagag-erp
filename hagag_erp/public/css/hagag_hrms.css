@@ -101,3 +101,14 @@ form.flex-col input:focus {
     color: var(--hagag-text);
     font-weight: 700;
 }
+
+/* HRMS login logo */
+svg[viewBox="0 0 117 117"] {
+    width: 96px !important;
+    height: 81px !important;
+    background: url("/assets/hagag_erp/images/hagag-logo.png") center / contain no-repeat;
+}
+
+svg[viewBox="0 0 117 117"] > * {
+    display: none;
+}

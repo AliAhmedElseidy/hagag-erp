@@ -3,14 +3,12 @@
 (function () {
     "use strict";
 
-    const HAGAG_TITLE = "حجاج HR";
+    const HAGAG_TITLE = "Hagag HR";
 
     function applyHagagBranding() {
         document.title = HAGAG_TITLE;
 
-        document.documentElement.setAttribute("dir", "rtl");
-        document.documentElement.setAttribute("lang", "ar");
-
+                
         const walker = document.createTreeWalker(
             document.body,
             NodeFilter.SHOW_TEXT
@@ -27,8 +25,8 @@
             if (!textNode.nodeValue) return;
 
             const replaced = textNode.nodeValue
-                .replace(/Frappe HR/g, "حجاج HR")
-                .replace(/FrappeHR/g, "حجاج HR");
+                .replace(/Frappe HR/g, "Hagag HR")
+                .replace(/FrappeHR/g, "Hagag HR");
 
             if (replaced !== textNode.nodeValue) {
                 textNode.nodeValue = replaced;

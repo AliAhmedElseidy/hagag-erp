@@ -1,18 +1,38 @@
 {
-  "name": "حجاج HR",
-  "short_name": "حجاج HR",
+  "name": "Hagag HR",
+  "short_name": "Hagag HR",
   "start_url": "/hrms",
   "display": "standalone",
   "background_color": "#ffffff",
-  "lang": "ar",
-  "dir": "rtl",
+  "lang": "en",
+  "dir": "ltr",
   "scope": "/assets/hrms/frontend/",
-  "description": "مؤسسة نورة مهنا أبوزيد للمقاولات",
+  "description": "Hagag HR - employee self-service",
   "theme_color": "#ffffff",
   "icons": [
-    {"src": "/assets/hagag_erp/manifest/hagag-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
-    {"src": "/assets/hagag_erp/manifest/hagag-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
-    {"src": "/assets/hagag_erp/manifest/hagag-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
-    {"src": "/assets/hagag_erp/manifest/hagag-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+    {
+      "src": "/assets/hagag_erp/manifest/hagag-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/hagag_erp/manifest/hagag-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/assets/hagag_erp/manifest/hagag-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/hagag_erp/manifest/hagag-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }

@@ -32,9 +32,9 @@ def rewrite(html):
     new = "/assets/hagag_erp/manifest/manifest.webmanifest?v=" + m
     old = "/assets/hrms/frontend/manifest.webmanifest"
     html = html.replace(old, new)
-    html = html.replace("<title>Frappe HR</title>", "<title>حجاج HR</title>")
+    html = html.replace("<title>Frappe HR</title>", "<title>Hagag HR</title>")
     t = 'apple-mobile-web-app-title" content="'
-    html = html.replace(t + "Frappe HR", t + "حجاج HR")
+    html = html.replace(t + "Frappe HR", t + "Hagag HR")
     return html.replace("</head>", tags() + "</head>", 1)
 
 

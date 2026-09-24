@@ -53,3 +53,41 @@ html[dir="rtl"] body{letter-spacing:0}
   .list-row{min-height:48px}
 }
 /* === end Hagag UIUX v1.1 block === */
+
+/* === Hagag UIUX v2 block === */
+:root{--hg-link:#b45309;--hg-soft:#fff7ed;--hg-line:#e5e7eb}
+html[data-theme="dark"]{--hg-link:#fbbf24;--hg-soft:#2a2013;--hg-line:#3f3f46;--primary:#d97706;--primary-color:#d97706}
+
+a{color:var(--hg-link)}
+
+html[data-theme="dark"] body{background:var(--bg-color)!important;color:var(--text-color)}
+html[data-theme="dark"] .page-head,
+html[data-theme="dark"] .page-head-content,
+html[data-theme="dark"] .desk-sidebar{background:var(--fg-color,#1c1c1c)}
+html[data-theme="dark"] .list-row:hover,
+html[data-theme="dark"] .desk-sidebar .standard-sidebar-item:hover,
+html[data-theme="dark"] .desk-sidebar .standard-sidebar-item.selected{background:var(--hg-soft)}
+
+.body-sidebar .standard-sidebar-item{border-radius:8px}
+.body-sidebar .standard-sidebar-item:hover,
+.body-sidebar .standard-sidebar-item.selected,
+.body-sidebar .standard-sidebar-item.active-sidebar{background:var(--hg-soft)!important}
+.body-sidebar .standard-sidebar-item.selected .sidebar-item-label,
+.body-sidebar .standard-sidebar-item.active-sidebar .sidebar-item-label{color:var(--hg-link)!important;font-weight:600}
+
+.list-row-container{border-color:var(--hg-line)}
+.list-row-container:hover .list-row{background:var(--hg-soft)}
+.list-row-head{font-weight:600}
+
+.form-section,.form-dashboard-section{border-color:var(--hg-line);border-radius:10px}
+.form-section .section-head{font-weight:600;color:var(--hg-link)}
+
+.layout-main-section .widget{border-radius:14px;border:1px solid var(--hg-line);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}
+.layout-main-section .widget:hover{transform:translateY(-2px);border-color:#f59e0b;box-shadow:0 10px 24px rgba(217,119,6,.16)}
+.layout-main-section .number-widget-box{border-inline-start:4px solid #d97706}
+.widget-title{font-weight:700}
+@media (hover:none),(prefers-reduced-motion:reduce){
+  .layout-main-section .widget{transition:none}
+  .layout-main-section .widget:hover{transform:none}
+}
+/* === end Hagag UIUX v2 block === */

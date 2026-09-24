@@ -1,0 +1,28 @@
+/* === Hagag Web v2 block === */
+body:has(.login-content.page-card){
+  min-height:100vh;
+  background:
+    radial-gradient(900px 500px at 85% -10%,rgba(245,158,11,.45),transparent 60%),
+    radial-gradient(800px 500px at -10% 110%,rgba(180,83,9,.40),transparent 60%),
+    #0b1220;
+  background-attachment:fixed;
+}
+body:has(.login-content.page-card) .app-logo{max-height:64px;width:auto}
+.login-content.page-card{
+  background:rgba(255,255,255,.94);
+  border:1px solid rgba(255,255,255,.4);
+  border-radius:22px;
+  box-shadow:0 24px 70px rgba(0,0,0,.45);
+  -webkit-backdrop-filter:blur(14px);
+  backdrop-filter:blur(14px);
+}
+.login-content .page-card-head{border:0}
+.login-content .page-card-head h4{font-weight:700;color:#111827}
+.login-content a{color:#b45309}
+.form-signin .form-control{height:46px;border-radius:12px;border:1px solid #e5e7eb;background:#fff;color:#111827}
+.form-signin .form-control:focus{border-color:#d97706;box-shadow:0 0 0 3px rgba(217,119,6,.2)}
+.form-signin .btn-primary{height:46px;border:0;border-radius:12px;font-weight:600;color:#fff;background:linear-gradient(135deg,#f59e0b,#d97706);box-shadow:0 8px 20px rgba(217,119,6,.35);transition:transform .15s ease,box-shadow .15s ease}
+.form-signin .btn-primary:hover,.form-signin .btn-primary:focus{transform:translateY(-1px);background:linear-gradient(135deg,#f59e0b,#b45309);box-shadow:0 12px 26px rgba(217,119,6,.45)}
+.form-signin .btn-default{height:44px;border-radius:12px}
+@media (max-width:480px){.login-content.page-card{border-radius:18px;margin-inline:12px}}
+/* === end Hagag Web v2 block === */

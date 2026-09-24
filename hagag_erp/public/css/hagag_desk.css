@@ -91,3 +91,27 @@ html[data-theme="dark"] .desk-sidebar .standard-sidebar-item.selected{background
   .layout-main-section .widget:hover{transform:none}
 }
 /* === end Hagag UIUX v2 block === */
+
+/* === Hagag UIUX v3 block === */
+:root{--hg-label:#111827}
+html[data-theme="dark"]{--hg-label:#f3f4f6}
+
+[class*="icon-title"]{
+  color:var(--hg-label)!important;
+  font-weight:600;
+  line-height:1.35;
+  text-align:center;
+  white-space:normal!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  overflow-wrap:anywhere;
+}
+html[data-theme="dark"] a:not(.btn):not([class*="icon"]){color:var(--hg-link)}
+
+:is(.desktop-icon,.app-icon){transition:transform .18s ease,box-shadow .18s ease}
+:is(.desktop-icon,.app-icon):hover{transform:translateY(-3px)}
+@media (hover:none),(prefers-reduced-motion:reduce){
+  :is(.desktop-icon,.app-icon){transition:none}
+  :is(.desktop-icon,.app-icon):hover{transform:none}
+}
+/* === end Hagag UIUX v3 block === */

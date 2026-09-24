@@ -265,6 +265,6 @@ app_license = "mit"
 
 after_request = ["hagag_erp.hrms_inject.inject"]
 
-app_include_css = ["/assets/hagag_erp/css/hagag_desk.bundle.css"]
+app_include_css = ["/assets/hagag_erp/css/hagag_desk.css"]
 
-web_include_css = ["/assets/hagag_erp/css/hagag_web.bundle.css"]
+web_include_css = ["/assets/hagag_erp/css/hagag_web.css"]

@@ -1,9 +1,0 @@
-/* === Hagag UIUX Desk v13 === */
-a[onclick*="show_about"],
-a[href*="frappe.io"],
-[data-label*="About"],
-[data-label*="Support"],
-[data-label*="معلومات عن النظام"],
-[data-label*="دعم فرابيه"] {
-    display: none !important;
-}

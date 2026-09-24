@@ -1,1 +1,55 @@
 .header-subtitle { display: none !important; }
+
+/* === Hagag UIUX v1.1 block === */
+:root{
+  --hagag-primary:#d97706;
+  --hagag-primary-dark:#b45309;
+  --hagag-primary-darker:#92400e;
+  --hagag-hover:#fff7ed;
+  --hagag-border:#e5e7eb;
+  --hagag-radius:8px;
+}
+
+html:not([data-theme="dark"]){
+  --primary:var(--hagag-primary-dark);
+  --primary-color:var(--hagag-primary-dark);
+  --btn-primary:var(--hagag-primary-dark);
+  --bg-color:#f8fafc;
+  --border-color:var(--hagag-border);
+}
+
+.btn{border-radius:var(--hagag-radius)}
+.btn.btn-primary{background-color:var(--hagag-primary-dark);border-color:var(--hagag-primary-dark);color:#fff}
+.btn.btn-primary:hover,.btn.btn-primary:focus{background-color:var(--hagag-primary-darker);border-color:var(--hagag-primary-darker)}
+
+.form-control,.awesomplete input{border-radius:var(--hagag-radius)}
+.form-control:focus{border-color:var(--hagag-primary);box-shadow:0 0 0 3px rgba(217,119,6,.18)}
+
+.page-head{border-bottom:1px solid var(--hagag-border)}
+.page-head .page-title .title-text{font-weight:700}
+
+.desk-sidebar .standard-sidebar-item,
+.body-sidebar .standard-sidebar-item{border-radius:var(--hagag-radius);margin-inline:8px;margin-block:2px}
+html:not([data-theme="dark"]) .desk-sidebar .standard-sidebar-item:hover,
+html:not([data-theme="dark"]) .desk-sidebar .standard-sidebar-item.selected,
+html:not([data-theme="dark"]) .body-sidebar .standard-sidebar-item:hover,
+html:not([data-theme="dark"]) .body-sidebar .standard-sidebar-item.selected{background:var(--hagag-hover)}
+.desk-sidebar .standard-sidebar-item.selected,
+.body-sidebar .standard-sidebar-item.selected{color:var(--hagag-primary-dark);font-weight:600}
+
+.workspace-page .widget{border-radius:10px}
+.form-section,.form-dashboard-section{border-radius:10px}
+
+.list-row{min-height:42px}
+html:not([data-theme="dark"]) .list-row:hover{background:var(--hagag-hover)}
+
+a{color:var(--hagag-primary-dark)}
+
+html[dir="rtl"] body{letter-spacing:0}
+
+@media (max-width:767px){
+  .btn{min-height:40px}
+  input.form-control,select.form-control,textarea.form-control{font-size:16px;min-height:44px}
+  .list-row{min-height:48px}
+}
+/* === end Hagag UIUX v1.1 block === */

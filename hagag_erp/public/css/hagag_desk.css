@@ -115,3 +115,15 @@ html[data-theme="dark"] a:not(.btn):not([class*="icon"]){color:var(--hg-link)}
   :is(.desktop-icon,.app-icon):hover{transform:none}
 }
 /* === end Hagag UIUX v3 block === */
+
+/* === Hagag UIUX Desk v6 block === */
+.dropdown-menu li:has(a[onclick*="show_about"]),
+.dropdown-menu li:has(a[href*="frappe.io"]),
+.dropdown-menu li:has(a[href*="support.frappe.io"]),
+.dropdown-menu li:has([data-label*="About"]),
+.dropdown-menu li:has([data-label*="Support"]),
+.dropdown-menu li:has([data-label*="معلومات عن النظام"]),
+.dropdown-menu li:has([data-label*="دعم فرابيه"]) {
+    display: none !important;
+}
+/* === end Hagag UIUX Desk v6 block === */

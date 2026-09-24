@@ -1,0 +1,13 @@
+/* === Hagag Web v12 === */
+body[data-path="login"] { background: radial-gradient(circle at 50% 0%, #1e293b, #020617) !important; display: flex !important; flex-direction: column !important; min-height: 100vh !important; margin: 0; }
+body[data-path="login"] .page-content-wrapper { flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px; }
+body[data-path="login"] .login-content.page-card { background: rgba(255, 255, 255, 0.98) !important; border-radius: 20px !important; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5) !important; padding: 2.5rem !important; border: 1px solid rgba(255,255,255,0.1) !important; margin: auto; width: 100%; max-width: 400px; }
+body[data-path="login"] .app-logo { content: url("https://erp.hagagco.com/files/470573.png") !important; max-height: 100px !important; width: auto !important; margin: 0 auto 1.5rem auto !important; display: block; mix-blend-mode: multiply; }
+body[data-path="login"] .web-footer, body[data-path="login"] footer, body[data-path="login"] .page-footer { display: none !important; }
+/* Custom Clickable Footer Styles */
+.custom-login-footer { margin-top: 25px; padding-top: 20px; border-top: 1px solid #e5e7eb; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.custom-login-footer img { width: 70px; mix-blend-mode: multiply; }
+.custom-login-footer .company-name { color: #374151; font-size: 15px; font-weight: 800; margin: 0; text-align: center; }
+.custom-login-footer .wa-btn { display: flex; align-items: center; justify-content: center; gap: 8px; background: #25D366; color: white !important; padding: 10px 20px; border-radius: 50px; text-decoration: none; font-weight: bold; font-size: 14px; transition: 0.3s; width: 100%; box-sizing: border-box; }
+.custom-login-footer .wa-btn:hover { background: #1ebe57; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(37,211,102,0.4); }
+.custom-login-footer .wa-btn svg { width: 20px; height: 20px; fill: white; }

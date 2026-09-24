@@ -25,11 +25,8 @@ app_license = "mit"
 # ------------------
 
 # include js, css files in header of desk.html
-# app_include_css = "/assets/hagag_erp/css/hagag_hrms.css"
-# app_include_js = "/assets/hagag_erp/js/hagag_hrms.js"
 
 # include js, css files in header of web template
-# web_include_css = "/assets/hagag_erp/css/hagag_erp.css"
 
 # include custom scss in every website theme (without file extension ".scss")
 # website_theme_scss = "hagag_erp/public/scss/website"
@@ -264,7 +261,6 @@ app_license = "mit"
 
 after_request = ["hagag_erp.hrms_inject.inject"]
 
-app_include_css = ["/assets/hagag_erp/css/hagag_desk_v13.css"]
 
-web_include_css = ["/assets/hagag_erp/css/hagag_web_v13.css"]
-app_include_js = ["/assets/hagag_erp/js/hagag_desk_v13.js"]
+app_include_css = ["/assets/hagag_erp/css/hagag_desk_v14.css"]
+web_include_css = ["/assets/hagag_erp/css/hagag_web_v14.css"]

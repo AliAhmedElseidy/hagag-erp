@@ -1,40 +1,22 @@
-### Hagag ERP
+# تخصيص واجهة مؤسسة نورة مهنا أبوزيد (Hagag ERP) 🛠️
 
-Custom Frappe app for Hagag ERP customizations
+هذا المستودع (App) مخصص لتعديل وتجميل واجهة نظام Frappe / ERPNext الخاصة بمؤسسة نورة مهنا أبوزيد للمقاولات (بايت زون).
 
-### Installation
+## 📂 دليل الملفات والصيانة (أين تجد ماذا؟)
 
-You can install this app using the [bench](https://github.com/frappe/bench) CLI:
+جميع التعديلات يتم ربطها من خلال ملف `hagag_erp/hooks.py`.
 
-```bash
-cd $PATH_TO_YOUR_BENCH
-bench get-app $URL_OF_THIS_REPO --branch main
-bench install-app hagag_erp
-```
+### 1️⃣ صفحة الدخول (Login Page) - الإصدار v15
+* **ملف الـ CSS:** `hagag_erp/public/css/hagag_web_v15.css`
+  * **وظيفته:** توسيط كارت تسجيل الدخول، إضافة خلفية متدرجة فخمة، تغيير حجم اللوجو العلوي وجعل خلفيته شفافة (`mix-blend-mode: multiply`)، وإخفاء فوتر فرابيه الافتراضي.
+* **ملف الـ JS:** `hagag_erp/public/js/hagag_web_v15.js`
+  * **وظيفته:** يحقن (Inject) فوتر مخصص أسفل نموذج الدخول يحتوي على زر واتساب أخضر (Clickable) للتواصل مع الدعم الفني، بالإضافة إلى شعار المؤسسة واسمها.
 
-### Contributing
+### 2️⃣ واجهة النظام الداخلية (Desk / Workspace) - الإصدار v16
+* **ملف الـ CSS:** `hagag_erp/public/css/hagag_desk_v16.css`
+  * **وظيفته:** محاولة إخفاء عناصر قائمة المستخدم ("معلومات عن النظام"، "دعم فرابيه") عبر الـ CSS كخط دفاع أول.
+* **ملف الـ JS (القناص 🎯):** `hagag_erp/public/js/hagag_desk_v16.js`
+  * **وظيفته:** الأداة الأقوى لإخفاء عناصر القائمة المزعجة. يستخدم `MutationObserver` لمراقبة الشاشة طوال الوقت وإخفاء "معلومات النظام" و "دعم فرابيه" بمجرد ظهورها في أجزاء من الثانية.
 
-This app uses `pre-commit` for code formatting and linting. Please [install pre-commit](https://pre-commit.com/#installation) and enable it for this repository:
-
-```bash
-cd apps/hagag_erp
-pre-commit install
-```
-
-Pre-commit is configured to use the following tools for checking and formatting your code:
-
-- ruff
-- eslint
-- prettier
-- pyupgrade
-### CI
-
-This app can use GitHub Actions for CI. The following workflows are configured:
-
-- CI: Installs this app and runs unit tests on every push to `develop` branch.
-- Linters: Runs [Frappe Semgrep Rules](https://github.com/frappe/semgrep-rules) and [pip-audit](https://pypi.org/project/pip-audit/) on every pull request.
-
-
-### License
-
-mit
+---
+**ملاحظة للصيانة:** عند عمل أي تحديث مستقبلي (Update) لنظام ERPNext، هذه التعديلات آمنة تماماً ولن تمحى لأنها موجودة داخل Custom App معزول.

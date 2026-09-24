@@ -128,7 +128,6 @@ html[data-theme="dark"] a:not(.btn):not([class*="icon"]){color:var(--hg-link)}
 }
 /* === end Hagag UIUX Desk v6 block === */
 
-} /* حماية لإغلاق أي بلوك قديم مكسور */
 /* === Hagag UIUX Desk v7 block === */
 [onclick*="show_about"],
 [href*="frappe.io"],

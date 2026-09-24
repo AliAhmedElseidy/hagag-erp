@@ -1,0 +1,4 @@
+{
+  "css/hagag_desk.bundle.css": ["public/css/hagag_desk.css"],
+  "css/hagag_web.bundle.css": ["public/css/hagag_web.css"]
+}

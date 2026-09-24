@@ -116,7 +116,6 @@ body:has(.login-content) .web-footer {
 }
 /* === end Hagag Web v6 block === */
 
-} /* حماية لإغلاق أي بلوك قديم مكسور */
 /* === Hagag Web v7 block === */
 body[data-path="login"] {
     background: radial-gradient(circle at 50% 0%, #1e293b, #020617) !important;

@@ -1,0 +1,6 @@
+/* === Hagag Web v15 === */
+body[data-path="login"] { background: radial-gradient(circle at 50% 0%, #1e293b, #020617) !important; display: flex !important; flex-direction: column !important; min-height: 100vh !important; margin: 0; }
+body[data-path="login"] .page-content-wrapper { flex: 1; display: flex; align-items: center; justify-content: center; padding: 15px; }
+body[data-path="login"] .login-content.page-card { background: #ffffff !important; border-radius: 20px !important; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.6) !important; padding: 2.5rem 2rem !important; border: 1px solid rgba(255,255,255,0.1) !important; margin: auto; width: 100%; max-width: 400px; }
+body[data-path="login"] .app-logo { content: url("https://erp.hagagco.com/files/470573.png") !important; max-height: 90px !important; width: auto !important; margin: 0 auto 1.5rem auto !important; display: block; mix-blend-mode: multiply; }
+body[data-path="login"] .web-footer, body[data-path="login"] footer, body[data-path="login"] .page-footer { display: none !important; }

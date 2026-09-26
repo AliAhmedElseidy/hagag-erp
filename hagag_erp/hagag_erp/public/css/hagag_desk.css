@@ -1,0 +1,21 @@
+/* Hagag ERP UI/UX v1 */
+:root{--hagag-primary:#d97706;--hagag-primary-dark:#b45309;--hagag-bg:#f8fafc;--hagag-surface:#fff;--hagag-text:#111827;--hagag-border:#e5e7eb;--hagag-hover:#fff7ed}
+body{background:var(--hagag-bg)!important;color:var(--hagag-text)}
+.header-subtitle{display:none!important}
+.btn{border-radius:8px!important}
+.btn-primary,.btn-primary:focus,.btn-primary:hover{background-color:var(--hagag-primary)!important;border-color:var(--hagag-primary)!important}
+.form-control,.input-with-feedback,.frappe-control input,.frappe-control select,.frappe-control textarea,.awesomplete input{border-radius:8px!important}
+.page-head,.page-head-content{background:var(--hagag-surface)}
+.page-head{border-bottom:1px solid var(--hagag-border)}
+.page-head .page-title .title-text{font-weight:700}
+.desk-sidebar{background:var(--hagag-surface)}
+.desk-sidebar .standard-sidebar-item{border-radius:8px;margin:2px 8px}
+.desk-sidebar .standard-sidebar-item:hover,.desk-sidebar .standard-sidebar-item.selected{background:var(--hagag-hover)}
+.desk-sidebar .standard-sidebar-item.selected{color:var(--hagag-primary-dark);font-weight:600}
+.workspace-page{background:transparent}
+.workspace-page .widget{border-radius:10px;border-color:var(--hagag-border)}
+.list-row{min-height:42px}
+.list-row:hover{background:#fffaf3}
+.form-section,.form-dashboard-section{border-radius:10px;border-color:var(--hagag-border)}
+a{color:var(--hagag-primary-dark)}
+@media(max-width:767px){.btn{min-height:38px}.form-control,.input-with-feedback{min-height:40px}}

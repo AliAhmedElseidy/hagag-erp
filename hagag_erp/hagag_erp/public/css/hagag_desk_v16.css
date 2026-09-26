@@ -1,0 +1,8 @@
+/* === Hagag UIUX Desk v16 === */
+.dropdown-menu li:has(a[onclick*="show_about"]),
+.dropdown-menu li:has(a[href*="frappe.io"]),
+li[data-label="About"], li[data-label="Support"],
+li[data-label="معلومات عن النظام"], li[data-label="دعم فرابيه"],
+a[onclick*="show_about"], a[href*="frappe.io"] {
+    display: none !important;
+}

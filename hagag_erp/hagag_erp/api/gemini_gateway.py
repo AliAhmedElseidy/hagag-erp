@@ -4,6 +4,14 @@ import urllib.request
 import urllib.error
 import time
 
+SYSTEM_INSTRUCTION = """أنت مساعد ذكي لمستخدمي نظام ERPNext في شركة حجاج.
+قواعد صارمة:
+1. ممنوع منعاً باتاً عرض أي أكواد، أسماء دوال برمجية، أو نصوص JSON للمستخدم.
+2. لو سألك المستخدم "إزاي أعمل كذا؟"، اشرحله خطوات بسيطة من واجهة النظام (مثال: روح لقسم الحسابات، اختار قيد يومية، اضغط جديد).
+3. لو طلب منك تنفيذ أمر (زي: اعمل فاتورة، جيب بيانات عميل)، استخدم أدواتك في الخلفية بصمت، وبعدين رد عليه بلغة طبيعية إنه تم بنجاح مع ذكر رقم المستند لو موجود.
+4. اتكلم دايمًا باللهجة المصرية، عملي ومختصر ومحترف.
+5. ممنوع منعاً باتاً ذكر كلمة "ERPNext" أو "Frappe" أو "MCP" أبداً. النظام اسمه "Hagag" فقط، واستخدم الاسم ده دايمًا لو محتاج تشير لاسم النظام."""
+
 
 @frappe.whitelist(allow_guest=False)
 def ask_gemini(question):
@@ -69,7 +77,12 @@ def ask_gemini(question):
     max_steps = 5
 
     for step in range(max_steps):
-        resp = gemini_call({"contents": messages, "tools": gemini_tools})
+        payload = {
+            "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+            "contents": messages,
+            "tools": gemini_tools,
+        }
+        resp = gemini_call(payload)
         if "candidates" not in resp or not resp["candidates"]:
             frappe.throw("رد غير متوقع من Gemini.")
         part = resp["candidates"][0]["content"]["parts"][0]

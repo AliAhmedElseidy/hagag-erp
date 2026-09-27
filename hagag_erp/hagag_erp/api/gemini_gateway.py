@@ -94,6 +94,26 @@ def ask_gemini(question):
             messages.append({"role": "model", "parts": [part]})
             messages.append({"role": "user", "parts": [{"functionResponse": {"name": fc["name"], "response": {"result": tool_result}}}]})
         else:
-            return {"status": "success", "message": part.get("text", "تمت العملية بدون رد نصي.")}
+            text = part.get("text", "تمت العملية بدون رد نصي.")
+            q = (question or "").strip().lower()
+            action = None
+
+            if any(x in q for x in ["قيد يومية", "قيد جديد", "قيد اليومية", "journal entry"]):
+                action = {"type": "open", "key": "journal_entry", "label": "📒 فتح قيد يومية"}
+            elif any(x in q for x in ["مشروع جديد", "اعمل مشروع", "إنشاء مشروع", "انشاء مشروع", "مشروع"]):
+                action = {"type": "open", "key": "project", "label": "📁 فتح مشروع جديد"}
+            elif any(x in q for x in ["فاتورة مبيعات", "اعمل فاتورة", "إنشاء فاتورة", "انشاء فاتورة"]):
+                action = {"type": "open", "key": "sales_invoice", "label": "🧾 فتح فاتورة مبيعات جديدة"}
+            elif any(x in q for x in ["عميل جديد", "إضافة عميل", "اضافة عميل", "اعمل عميل"]):
+                action = {"type": "open", "key": "customer", "label": "👤 إضافة عميل جديد"}
+            elif any(x in q for x in ["عرض سعر", "اعمل عرض سعر", "إنشاء عرض سعر", "انشاء عرض سعر"]):
+                action = {"type": "open", "key": "quotation", "label": "📝 فتح عرض سعر جديد"}
+            elif any(x in q for x in ["مهمة جديدة", "اعمل مهمة", "إنشاء مهمة", "انشاء مهمة"]):
+                action = {"type": "open", "key": "task", "label": "📋 فتح مهمة جديدة"}
+
+            result = {"status": "success", "message": text}
+            if action:
+                result["action"] = action
+            return result
 
     return {"status": "warning", "message": "استغرق الذكاء الاصطناعي خطوات كثيرة جدًا. حاول تصيغ السؤال بشكل أبسط."}

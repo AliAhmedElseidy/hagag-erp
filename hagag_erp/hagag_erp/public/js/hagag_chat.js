@@ -21,6 +21,9 @@
       #hagag-chat-input{flex:1;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px;resize:none;direction:rtl;}
       #hagag-chat-send{background:#d97706;color:#fff;border:none;border-radius:8px;padding:0 14px;cursor:pointer;font-size:13px;}
       #hagag-chat-send:disabled{opacity:.5;cursor:default;}
+      .hc-action-btn{display:block;width:100%;margin-top:8px;padding:8px 10px;border:none;border-radius:8px;
+        background:#d97706;color:#fff;cursor:pointer;font-size:13px;text-align:center;}
+      .hc-action-btn:hover{opacity:.9;}
     `;
     const style = document.createElement("style");
     style.textContent = css;
@@ -66,6 +69,31 @@
     btn.addEventListener("click", () => panel.classList.toggle("open"));
     closeBtn.addEventListener("click", () => panel.classList.remove("open"));
 
+    function addAction(log, action) {
+      if (!action || action.type !== "open") return;
+      const routes = {
+        journal_entry: "/app/journal-entry/new",
+        project: "/app/project/new",
+        sales_invoice: "/app/sales-invoice/new",
+        customer: "/app/customer/new",
+        quotation: "/app/quotation/new",
+        task: "/app/task/new"
+      };
+      const route = routes[action.key];
+      if (!route) return;
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "hc-action-btn";
+      btn.textContent = action.label || "فتح";
+      btn.addEventListener("click", () => {
+        window.location.href = route;
+      });
+
+      log.appendChild(btn);
+      log.scrollTop = log.scrollHeight;
+    }
+
     function send() {
       const question = input.value.trim();
       if (!question) return;
@@ -82,6 +110,9 @@
           sendBtn.disabled = false;
           if (r.message && r.message.message) {
             addMessage(log, r.message.message, "hc-bot");
+            if (r.message.action) {
+              addAction(log, r.message.action);
+            }
           } else {
             addMessage(log, "معرفتش أجاوب على السؤال ده.", "hc-bot");
           }

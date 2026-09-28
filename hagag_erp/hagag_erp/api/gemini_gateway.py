@@ -4,26 +4,27 @@ import urllib.request
 import urllib.error
 import time
 
-SYSTEM_INSTRUCTION = """أنت مساعد ذكي لمستخدمي نظام ERPNext في شركة حجاج.
+SYSTEM_INSTRUCTION = """أنت مساعد المحاسبة الذكي والمستقل لشركة حجاج (Hagag).
 قواعد صارمة:
-1. ممنوع منعاً باتاً عرض أي أكواد، أسماء دوال برمجية، أو نصوص JSON للمستخدم.
-2. لو سألك المستخدم "إزاي أعمل كذا؟"، اشرحله خطوات بسيطة من واجهة النظام (مثال: روح لقسم الحسابات، اختار قيد يومية، اضغط جديد).
-3. لو طلب منك تنفيذ أمر (زي: اعمل فاتورة، جيب بيانات عميل)، استخدم أدواتك في الخلفية بصمت، وبعدين رد عليه بلغة طبيعية إنه تم بنجاح مع ذكر رقم المستند لو موجود.
-4. اتكلم دايمًا باللهجة المصرية، عملي ومختصر ومحترف.
-5. ممنوع منعاً باتاً ذكر كلمة "ERPNext" أو "Frappe" أو "MCP" أبداً. النظام اسمه "Hagag" فقط، واستخدم الاسم ده دايمًا لو محتاج تشير لاسم النظام."""
-
+1. أنت نظام "حجاج" المستقل، أنكر تماماً وبشكل قاطع أي علاقة بـ ERPNext أو Frappe.
+2. لا تملك أي صلاحيات لإنشاء أو تعديل البيانات. مسموح لك فقط بالبحث والقراءة.
+3. الأهم: للبحث في شجرة الحسابات، يجب عليك فوراً استخدام أدواتك المتاحة للبحث أو جلب البيانات من جدول (Account). لا تخمن أسماء الحسابات أبداً، بل اقرأها من النظام.
+4. اقترح على المستخدم التوجيه المحاسبي بدقة (مثلاً: من حساب كذا إلى حساب كذا) بناءً على الحسابات الحقيقية الموجودة في الشجرة التي قرأتها.
+5. اشرح الخطوات باختصار شديد وعملي. إياك أن تكتب للمستخدم خطواتك الداخلية (مثل "جاري البحث")، بل استخدم أدواتك في صمت ورد بالنتيجة فقط بدون أي جمل ختامية محفوظة.
+6. تحدث باللهجة المصرية وباختصار شديد."""
 
 @frappe.whitelist(allow_guest=False)
 def ask_gemini(question):
     gemini_api_key = frappe.conf.get("gemini_api_key")
     mcp_token = frappe.conf.get("mcp_token")
     mcp_url = frappe.conf.get("mcp_url", "http://mcp-erpnext:3012/mcp")
-    gemini_model = "gemini-3.1-flash-lite"
+    
+    models = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]
 
     if not gemini_api_key or not mcp_token:
-        frappe.throw("خطأ: لم يتم العثور على مفاتيح Gemini أو MCP في الإعدادات.")
+        frappe.throw("خطأ: مفاتيح الإعدادات غير موجودة.")
     if not question:
-        frappe.throw("خطأ: يرجى إرسال سؤال (question).")
+        frappe.throw("خطأ: يرجى إرسال سؤال.")
 
     def mcp_call(method, params=None, req_id=1):
         payload = json.dumps({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params or {}}).encode("utf-8")
@@ -39,23 +40,23 @@ def ask_gemini(question):
             frappe.throw(f"فشل الاتصال بسيرفر MCP: {str(e)}")
 
     def gemini_call(payload):
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={gemini_api_key}"
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
-        for attempt in range(4):
+        for attempt in range(len(models) * 2):
+            current_model = models[attempt % len(models)]
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent?key={gemini_api_key}"
+            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     return json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as e:
-                body = e.read().decode("utf-8", errors="ignore")
                 if e.code in (429, 503):
-                    time.sleep(15)
+                    time.sleep(2)
                     continue
                 if e.code == 404:
-                    frappe.throw(f"الموديل {gemini_model} غير متاح حاليًا. تفاصيل: {body}")
-                frappe.throw(f"خطأ من Gemini ({e.code}): {body}")
+                    continue
+                frappe.throw(f"خطأ ({e.code})")
             except urllib.error.URLError as e:
-                frappe.throw(f"فشل الاتصال بخدمة Gemini: {str(e)}")
-        frappe.throw("تم تجاوز عدد محاولات الاتصال بـ Gemini بسبب ضغط أو حد الاستخدام.")
+                frappe.throw("فشل الاتصال بخدمة Gemini")
+        frappe.throw("تجاوز عدد المحاولات.")
 
     mcp_call("initialize", {
         "protocolVersion": "2026-07-28", "capabilities": {},
@@ -65,50 +66,56 @@ def ask_gemini(question):
 
     tools_resp = mcp_call("tools/list", req_id=2)
     mcp_tools = tools_resp.get("result", {}).get("tools", [])
-    if not mcp_tools:
-        frappe.throw("لم يتم العثور على أدوات (Tools) في سيرفر MCP.")
-
+    
+    # السماح بأدوات القراءة والبحث ومنع التعديل
+    safe_mcp_tools = [t for t in mcp_tools if not any(x in t["name"].lower() for x in ["insert", "create", "update", "delete", "write", "set"])]
+    
     gemini_tools = [{"functionDeclarations": [
         {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("inputSchema", {"type": "object", "properties": {}})}
-        for t in mcp_tools
-    ]}]
+        for t in safe_mcp_tools
+    ]}] if safe_mcp_tools else []
 
     messages = [{"role": "user", "parts": [{"text": question}]}]
-    max_steps = 5
+    max_steps = 6 # زودنا الخطوات شوية عشان يلحق يبحث ويقرا براحته
 
     for step in range(max_steps):
         payload = {
             "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
             "contents": messages,
-            "tools": gemini_tools,
         }
+        if gemini_tools:
+            payload["tools"] = gemini_tools
+
         resp = gemini_call(payload)
         if "candidates" not in resp or not resp["candidates"]:
             frappe.throw("رد غير متوقع من Gemini.")
-        part = resp["candidates"][0]["content"]["parts"][0]
+        
+        model_parts = resp["candidates"][0]["content"].get("parts", [])
+        messages.append({"role": "model", "parts": model_parts})
 
-        if "functionCall" in part:
-            fc = part["functionCall"]
+        fc_part = next((p for p in model_parts if "functionCall" in p), None)
+
+        if fc_part:
+            fc = fc_part["functionCall"]
             mcp_res = mcp_call("tools/call", {"name": fc["name"], "arguments": fc.get("args", {})}, req_id=10 + step)
             tool_result = mcp_res.get("result", mcp_res)
-            messages.append({"role": "model", "parts": [part]})
             messages.append({"role": "user", "parts": [{"functionResponse": {"name": fc["name"], "response": {"result": tool_result}}}]})
         else:
-            text = part.get("text", "تمت العملية بدون رد نصي.")
-            q = (question or "").strip().lower()
+            text = next((p.get("text", "") for p in model_parts if "text" in p), "تمت العملية.")
+            q_lower = (question or "").strip().lower()
             action = None
 
-            if any(x in q for x in ["قيد يومية", "قيد جديد", "قيد اليومية", "journal entry"]):
+            if any(x in q_lower for x in ["قيد", "يومية", "يوميه", "مصروف", "مصاريف"]):
                 action = {"type": "open", "key": "journal_entry", "label": "📒 فتح قيد يومية"}
-            elif any(x in q for x in ["مشروع جديد", "اعمل مشروع", "إنشاء مشروع", "انشاء مشروع", "مشروع"]):
+            elif any(x in q_lower for x in ["مشروع"]):
                 action = {"type": "open", "key": "project", "label": "📁 فتح مشروع جديد"}
-            elif any(x in q for x in ["فاتورة مبيعات", "اعمل فاتورة", "إنشاء فاتورة", "انشاء فاتورة"]):
+            elif any(x in q_lower for x in ["فاتورة", "فاتوره", "مبيعات"]):
                 action = {"type": "open", "key": "sales_invoice", "label": "🧾 فتح فاتورة مبيعات جديدة"}
-            elif any(x in q for x in ["عميل جديد", "إضافة عميل", "اضافة عميل", "اعمل عميل"]):
+            elif any(x in q_lower for x in ["عميل", "زبون"]):
                 action = {"type": "open", "key": "customer", "label": "👤 إضافة عميل جديد"}
-            elif any(x in q for x in ["عرض سعر", "اعمل عرض سعر", "إنشاء عرض سعر", "انشاء عرض سعر"]):
+            elif any(x in q_lower for x in ["عرض سعر", "عرض اسعار", "تسعير"]):
                 action = {"type": "open", "key": "quotation", "label": "📝 فتح عرض سعر جديد"}
-            elif any(x in q for x in ["مهمة جديدة", "اعمل مهمة", "إنشاء مهمة", "انشاء مهمة"]):
+            elif any(x in q_lower for x in ["مهمة", "مهمه", "مهام", "تاسك"]):
                 action = {"type": "open", "key": "task", "label": "📋 فتح مهمة جديدة"}
 
             result = {"status": "success", "message": text}
@@ -116,4 +123,4 @@ def ask_gemini(question):
                 result["action"] = action
             return result
 
-    return {"status": "warning", "message": "استغرق الذكاء الاصطناعي خطوات كثيرة جدًا. حاول تصيغ السؤال بشكل أبسط."}
+    return {"status": "warning", "message": "استغرق وقتاً طويلاً. حاول تبسيط السؤال."}

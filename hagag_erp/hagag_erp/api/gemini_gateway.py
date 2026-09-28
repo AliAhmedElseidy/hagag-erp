@@ -11,7 +11,9 @@ SYSTEM_INSTRUCTION = """أنت مساعد المحاسبة الذكي والمس
 3. الأهم: للبحث في شجرة الحسابات، يجب عليك فوراً استخدام أدواتك المتاحة للبحث أو جلب البيانات من جدول (Account). لا تخمن أسماء الحسابات أبداً، بل اقرأها من النظام.
 4. اقترح على المستخدم التوجيه المحاسبي بدقة (مثلاً: من حساب كذا إلى حساب كذا) بناءً على الحسابات الحقيقية الموجودة في الشجرة التي قرأتها.
 5. اشرح الخطوات باختصار شديد وعملي. إياك أن تكتب للمستخدم خطواتك الداخلية (مثل "جاري البحث")، بل استخدم أدواتك في صمت ورد بالنتيجة فقط بدون أي جمل ختامية محفوظة.
-6. تحدث باللهجة المصرية وباختصار شديد."""
+6. تحدث بالعربية فقط وباللهجة المصرية وباختصار شديد. ممنوع استخدام الإنجليزية في الرد النهائي أو عرض نتائج الأدوات أو شرحها. إذا كانت نتائج أي أداة باللغة الإنجليزية، حوّلها داخليًا إلى العربية ثم اعرض للمستخدم النتيجة بالعربية فقط. لا تذكر خطوات التفكير الداخلي أو الـreasoning أو أي نص إنجليزي للمستخدم.
+7. يجب أن يكون التفكير الداخلي والاستدلال باللغة العربية فقط وباللهجة المصرية، ولا تستخدم الإنجليزية في التفكير أو الاستدلال.
+"""
 
 @frappe.whitelist(allow_guest=False)
 def ask_gemini(question):
@@ -19,7 +21,7 @@ def ask_gemini(question):
     mcp_token = frappe.conf.get("mcp_token")
     mcp_url = frappe.conf.get("mcp_url", "http://mcp-erpnext:3012/mcp")
     
-    models = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]
+    models = ["gemma-4-26b-a4b-it", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]
 
     if not gemini_api_key or not mcp_token:
         frappe.throw("خطأ: مفاتيح الإعدادات غير موجودة.")
@@ -68,7 +70,7 @@ def ask_gemini(question):
     mcp_tools = tools_resp.get("result", {}).get("tools", [])
     
     # السماح بأدوات القراءة والبحث ومنع التعديل
-    safe_mcp_tools = [t for t in mcp_tools if not any(x in t["name"].lower() for x in ["insert", "create", "update", "delete", "write", "set"])]
+    safe_mcp_tools = [t for t in mcp_tools if t["name"].lower().endswith(("_list", "_get"))]
     
     gemini_tools = [{"functionDeclarations": [
         {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("inputSchema", {"type": "object", "properties": {}})}
@@ -101,7 +103,7 @@ def ask_gemini(question):
             tool_result = mcp_res.get("result", mcp_res)
             messages.append({"role": "user", "parts": [{"functionResponse": {"name": fc["name"], "response": {"result": tool_result}}}]})
         else:
-            text = next((p.get("text", "") for p in model_parts if "text" in p), "تمت العملية.")
+            text = next((p.get("text", "") for p in model_parts if "text" in p and not p.get("thought")), "تمت العملية.")
             q_lower = (question or "").strip().lower()
             action = None
 

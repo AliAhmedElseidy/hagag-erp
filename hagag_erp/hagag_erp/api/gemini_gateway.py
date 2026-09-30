@@ -3,126 +3,717 @@ import json
 import urllib.request
 import urllib.error
 import time
+import re
 
-SYSTEM_INSTRUCTION = """أنت مساعد المحاسبة الذكي والمستقل لشركة حجاج (Hagag).
-قواعد صارمة:
-1. أنت نظام "حجاج" المستقل، أنكر تماماً وبشكل قاطع أي علاقة بـ ERPNext أو Frappe.
-2. لا تملك أي صلاحيات لإنشاء أو تعديل البيانات. مسموح لك فقط بالبحث والقراءة.
-3. الأهم: للبحث في شجرة الحسابات، يجب عليك فوراً استخدام أدواتك المتاحة للبحث أو جلب البيانات من جدول (Account). لا تخمن أسماء الحسابات أبداً، بل اقرأها من النظام.
-4. اقترح على المستخدم التوجيه المحاسبي بدقة (مثلاً: من حساب كذا إلى حساب كذا) بناءً على الحسابات الحقيقية الموجودة في الشجرة التي قرأتها.
-5. اشرح الخطوات باختصار شديد وعملي. إياك أن تكتب للمستخدم خطواتك الداخلية (مثل "جاري البحث")، بل استخدم أدواتك في صمت ورد بالنتيجة فقط بدون أي جمل ختامية محفوظة.
-6. تحدث بالعربية فقط وباللهجة المصرية وباختصار شديد. ممنوع استخدام الإنجليزية في الرد النهائي أو عرض نتائج الأدوات أو شرحها. إذا كانت نتائج أي أداة باللغة الإنجليزية، حوّلها داخليًا إلى العربية ثم اعرض للمستخدم النتيجة بالعربية فقط. لا تذكر خطوات التفكير الداخلي أو الـreasoning أو أي نص إنجليزي للمستخدم.
-7. يجب أن يكون التفكير الداخلي والاستدلال باللغة العربية فقط وباللهجة المصرية، ولا تستخدم الإنجليزية في التفكير أو الاستدلال.
+from hagag_erp.api.whatsapp import send_invoice_whatsapp
+
+
+SYSTEM_INSTRUCTION = """أنت مساعد حجاج الذكي والمستقل لشركة حجاج.
+
+القواعد:
+1. أنت نظام حجاج المستقل ولا تذكر ERPNext أو Frappe للمستخدم.
+2. أدوات النظام الخاصة بالبيانات للقراءة والبحث فقط.
+3. لا تنشئ أو تعدل أو تحذف أي بيانات.
+4. توجد أداة باسم send_invoice_pdf لإرسال PDF لفاتورة مبيعات موجودة بالفعل إلى نفس محادثة واتساب.
+5. إذا طلب المستخدم إرسال فاتورة PDF، أو وافق على إرسال فاتورة تم تحديدها في الرسالة السابقة، استخدم send_invoice_pdf فوراً.
+6. لا تسأل عن رقم الفاتورة إذا كان رقمها موجوداً في سياق المحادثة.
+7. لا تخمن رقم فاتورة. استخدم رقم الفاتورة الذي حصلت عليه من أدوات النظام أو من سياق المحادثة.
+8. تحدث بالعربية المصرية وباختصار شديد.
+9. لا تشرح خطواتك الداخلية ولا تذكر الأدوات للمستخدم.
+
+
+قواعد التعامل مع PDF المرفق:
+- إذا وصل ملف PDF مرفق من المستخدم عبر pdf_base64، يجوز قراءة محتواه واستخراج بياناته حتى لو كان صادرًا من مورد أو شركة خارجية وليس من ERPNext.
+- إذا كان الملف فاتورة أو مستندًا محاسبيًا، استخدم البيانات المستخرجة منه لإعداد قيد يومية مقترح داخل نظام شركة حجاج.
+- بيانات PDF هي مصدر بيانات للمستند المراد إدخاله، وليست بيانات ERPNext الحالية.
+- لا ترفض الفاتورة لمجرد أنها خارجية.
+- لا تنشئ أو تعدل أي مستند محاسبي بسبب قراءة PDF وحدها.
+- اعرض أولًا Preview واضحًا للقيد المقترح: الحسابات، المدين، الدائن، المورد، رقم الفاتورة، التاريخ، الضريبة والإجمالي.
+- لا تنفذ إنشاء قيد اليومية إلا إذا طلب المستخدم صراحة التنفيذ مثل: "نفّذ" أو "اعمل القيد".
+- عند طلب التنفيذ، استخدم أداة إنشاء Journal Entry المسموح بها، ثم أعد رقم القيد الذي أنشأه النظام.
+- إذا كانت بيانات الحسابات أو الضريبة غير واضحة من الفاتورة، اسأل المستخدم بدل التخمين.
+- لا تعتبر أي بيانات مستخرجة من PDF حقيقة محاسبية نهائية إلا بعد مراجعة المستخدم وتأكيد التنفيذ.
+
+قواعد صارمة لدقة بيانات النظام:
+
+- بيانات النظام الحالية هي مصدر الحقيقة الوحيد.
+- أي معلومة عن العملاء أو الفواتير أو عروض الأسعار أو القيود أو الحسابات أو الأصناف يجب الحصول عليها من أداة القراءة المناسبة من النظام.
+- ممنوع اعتبار الذاكرة أو سجل المحادثة أو إجابات المساعد السابقة مصدرًا لبيانات النظام.
+- عند سؤال المستخدم عن بيانات حالية مثل: كام، كل، مين، آخر، الموجودة، في السيستم، قائمة: يجب تنفيذ قراءة جديدة من النظام.
+- إذا لم توجد أداة قراءة مناسبة أو فشلت القراءة، لا تخمّن ولا تستخدم الذاكرة كبديل؛ أخبر المستخدم أن البيانات غير متاحة حاليًا.
+- عند وجود تعارض بين الذاكرة وبيانات النظام، بيانات النظام هي الصحيحة.
+- إذا قال المستخدم إن المعلومة غلط، أعد القراءة من النظام ولا تحاول تصحيحها من الذاكرة.
+- الذاكرة تستخدم لفهم السياق فقط، وليست قاعدة بيانات للنظام.
+- لا تنفذ أي إجراء لم يطلبه المستخدم صراحة.
+- ممنوع إرسال PDF أو إنشاء أو تعديل أو Submit أو Cancel أو Delete أو إعادة تنفيذ إجراء سابق بدون طلب صريح من المستخدم.
+- لا ترسل أي فاتورة أو مستند تلقائيًا لمجرد أن المستخدم قال إن الإجابة صحيحة أو شكر المساعد.
+- لا تخترع أسماء أو أرقام مستندات أو مبالغ أو تواريخ أو حسابات.
 """
 
+
 @frappe.whitelist(allow_guest=False)
-def ask_gemini(question):
+def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, filename=None):
     gemini_api_key = frappe.conf.get("gemini_api_key")
     mcp_token = frappe.conf.get("mcp_token")
     mcp_url = frappe.conf.get("mcp_url", "http://mcp-erpnext:3012/mcp")
-    
-    models = ["gemma-4-26b-a4b-it", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]
+
+    # Gemini أولاً لأننا نحتاج دعم function calling بشكل موثوق.
+    models = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemma-4-26b-a4b-it"]
 
     if not gemini_api_key or not mcp_token:
         frappe.throw("خطأ: مفاتيح الإعدادات غير موجودة.")
+
     if not question:
         frappe.throw("خطأ: يرجى إرسال سؤال.")
 
     def mcp_call(method, params=None, req_id=1):
-        payload = json.dumps({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params or {}}).encode("utf-8")
-        req = urllib.request.Request(mcp_url, data=payload, headers={
+        params = dict(params or {})
+        meta = dict(params.get("_meta") or {})
+        meta.setdefault(
+            "io.modelcontextprotocol/protocolVersion",
+            "2026-07-28",
+        )
+        meta.setdefault(
+            "io.modelcontextprotocol/clientInfo",
+            {"name": "frappe-gateway", "version": "1.0"},
+        )
+        meta.setdefault(
+            "io.modelcontextprotocol/clientCapabilities",
+            {},
+        )
+        params["_meta"] = meta
+
+        payload = json.dumps({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": method,
+            "params": params,
+        }).encode("utf-8")
+
+        headers = {
             "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
             "Authorization": f"Bearer {mcp_token}",
             "MCP-Protocol-Version": "2026-07-28",
-        })
+            "Mcp-Method": method,
+        }
+
+        if method == "tools/call":
+            tool_name = str(params.get("name") or "")
+            if tool_name:
+                headers["Mcp-Name"] = tool_name
+
+        req = urllib.request.Request(
+            mcp_url,
+            data=payload,
+            headers=headers,
+        )
+
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            frappe.throw(
+                f"فشل الاتصال بسيرفر MCP: HTTP {e.code}: {body[:500]}"
+            )
         except urllib.error.URLError as e:
             frappe.throw(f"فشل الاتصال بسيرفر MCP: {str(e)}")
 
     def gemini_call(payload):
         for attempt in range(len(models) * 2):
             current_model = models[attempt % len(models)]
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent?key={gemini_api_key}"
-            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
+
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                + current_model
+                + ":generateContent?key="
+                + gemini_api_key
+            )
+
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+
             try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
+                with urllib.request.urlopen(req, timeout=60) as resp:
                     return json.loads(resp.read().decode("utf-8"))
+
             except urllib.error.HTTPError as e:
-                if e.code in (429, 503):
+                body = e.read().decode("utf-8", errors="replace")
+                if e.code in (429, 503, 404):
                     time.sleep(2)
                     continue
-                if e.code == 404:
-                    continue
-                frappe.throw(f"خطأ ({e.code})")
-            except urllib.error.URLError as e:
+                frappe.throw(f"خطأ Gemini ({e.code}): {body[:1500]}")
+
+            except urllib.error.URLError:
                 frappe.throw("فشل الاتصال بخدمة Gemini")
+
         frappe.throw("تجاوز عدد المحاولات.")
 
-    mcp_call("initialize", {
-        "protocolVersion": "2026-07-28", "capabilities": {},
-        "clientInfo": {"name": "frappe-gateway", "version": "1.0"},
-        "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}
-    }, req_id=1)
+    # MCP tools
+    mcp_call(
+        "initialize",
+        {
+            "protocolVersion": "2026-07-28",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "frappe-gateway",
+                "version": "1.0",
+            },
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+            },
+        },
+        req_id=1,
+    )
 
     tools_resp = mcp_call("tools/list", req_id=2)
     mcp_tools = tools_resp.get("result", {}).get("tools", [])
-    
-    # السماح بأدوات القراءة والبحث ومنع التعديل
-    safe_mcp_tools = [t for t in mcp_tools if t["name"].lower().endswith(("_list", "_get"))]
-    
-    gemini_tools = [{"functionDeclarations": [
-        {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("inputSchema", {"type": "object", "properties": {}})}
-        for t in safe_mcp_tools
-    ]}] if safe_mcp_tools else []
 
-    messages = [{"role": "user", "parts": [{"text": question}]}]
-    max_steps = 6 # زودنا الخطوات شوية عشان يلحق يبحث ويقرا براحته
+    def normalize_gemini_schema(schema):
+        """
+        Convert MCP JSON Schema to the subset accepted by Gemini
+        Function Calling, without changing the original schema used
+        when executing the MCP tool.
+        """
+        if not isinstance(schema, dict):
+            return {"type": "object", "properties": {}}
+
+        # Resolve union schemas conservatively.
+        if "anyOf" in schema and isinstance(schema["anyOf"], list):
+            choices = [
+                x for x in schema["anyOf"]
+                if isinstance(x, dict)
+                and x.get("type") != "null"
+            ]
+            if choices:
+                merged = dict(choices[0])
+                if len(choices) > 1 and "description" not in merged:
+                    merged["description"] = schema.get("description", "")
+                schema = merged
+            else:
+                schema = {"type": "string"}
+
+        if "oneOf" in schema and isinstance(schema["oneOf"], list):
+            choices = [
+                x for x in schema["oneOf"]
+                if isinstance(x, dict)
+                and x.get("type") != "null"
+            ]
+            schema = dict(choices[0]) if choices else {"type": "string"}
+
+        out = {}
+
+        # Gemini Function Calling schema supports a restricted set.
+        allowed = {
+            "title",
+            "description",
+            "type",
+            "format",
+            "enum",
+            "properties",
+            "required",
+            "items",
+            "minimum",
+            "maximum",
+            "minItems",
+            "maxItems",
+            "nullable",
+        }
+
+        for key in allowed:
+            if key in schema:
+                out[key] = schema[key]
+
+        # JSON Schema may use a union such as ["string", "array"].
+        # Gemini Function Calling requires exactly one concrete type.
+        schema_type = schema.get("type")
+        if isinstance(schema_type, list):
+            non_null = [x for x in schema_type if x != "null"]
+            if non_null:
+                if "array" in non_null and isinstance(schema.get("items"), dict):
+                    out["type"] = "array"
+                elif "object" in non_null and isinstance(schema.get("properties"), dict):
+                    out["type"] = "object"
+                else:
+                    out["type"] = non_null[0]
+                if "null" in schema_type:
+                    out["nullable"] = True
+            else:
+                out["type"] = "string"
+
+        # Some MCP schemas use tuple-style prefixItems.
+        # Gemini function calling wants a single items schema.
+        if "prefixItems" in schema and "items" not in schema:
+            prefix = schema.get("prefixItems")
+            if isinstance(prefix, list) and prefix:
+                out["items"] = normalize_gemini_schema(prefix[0])
+
+        if isinstance(schema.get("properties"), dict):
+            out["properties"] = {
+                str(name): normalize_gemini_schema(value)
+                for name, value in schema["properties"].items()
+                if isinstance(value, dict)
+            }
+
+        if isinstance(schema.get("items"), dict):
+            out["items"] = normalize_gemini_schema(schema["items"])
+
+        if isinstance(out.get("required"), list):
+            out["required"] = [
+                str(x) for x in out["required"]
+                if isinstance(x, str)
+            ]
+
+        # Gemini does not need OpenAPI/JSON-Schema additionalProperties
+        # for function calling. Drop it rather than sending an invalid field.
+
+        if "type" not in out:
+            if "properties" in out:
+                out["type"] = "object"
+            elif "items" in out:
+                out["type"] = "array"
+            else:
+                out["type"] = "object"
+
+        return out
+
+    # Gemini يرى كل أدوات MCP، لكن تنفيذ أدوات الكتابة يخضع لـ hard gate أدناه.
+    safe_mcp_tools = list(mcp_tools)
+
+    gemini_declarations = [
+        {
+            "name": t["name"],
+            "description": t.get("description", ""),
+            "parameters": normalize_gemini_schema(
+                t.get(
+                    "inputSchema",
+                    {"type": "object", "properties": {}},
+                )
+            ),
+        }
+        for t in safe_mcp_tools
+    ]
+
+    # أداة PDF محلية ينفذها الـ Gateway بعد أن يطلبها Gemini.
+    gemini_declarations.append(
+        {
+            "name": "send_invoice_pdf",
+            "description": (
+                "إرسال PDF لفاتورة مبيعات موجودة بالفعل إلى نفس رقم واتساب "
+                "صاحب المحادثة. إذا كانت الفاتورة محددة في سياق المحادثة "
+                "واستخدم المستخدم عبارات مثل ابعتهالي PDF أو ابعتها أو أيوة "
+                "بعد سؤال التأكيد، يجب استدعاء هذه الأداة مباشرة بدون سؤال "
+                "المستخدم عن رقم الفاتورة مرة أخرى."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "invoice_name": {
+                        "type": "string",
+                        "description": (
+                            "اسم فاتورة المبيعات الفعلي، مثل "
+                            "ACC-SINV-2026-00001-1"
+                        ),
+                    }
+                },
+                "required": ["invoice_name"],
+            },
+        }
+    )
+
+    gemini_tools = [
+        {
+            "functionDeclarations": gemini_declarations
+        }
+    ]
+
+    # ذاكرة المحادثة
+    memory_key = (
+        f"hagag_ai_wa_memory:{conversation_id}"
+        if conversation_id
+        else None
+    )
+
+    history = []
+
+    if memory_key:
+        try:
+            history = frappe.cache().get_value(memory_key) or []
+        except Exception:
+            history = []
+
+    recent = history[-10:]
+
+    messages = []
+
+    for item in recent:
+        role = item.get("role")
+        text = item.get("text")
+
+        if role in ("user", "model") and text:
+            messages.append(
+                {
+                    "role": role,
+                    "parts": [{"text": text}],
+                }
+            )
+
+    # لو المستخدم قال "أيوة" بعد سؤال تأكيد، نخلي السياق صريح جداً.
+    q_lower = (question or "").strip().lower()
+
+    last_invoice = None
+
+    if conversation_id:
+        try:
+            last_invoice = frappe.cache().get_value(
+                f"hagag_ai_last_invoice:{conversation_id}"
+            )
+        except Exception:
+            last_invoice = None
+
+    # WhatsApp قد يستخدم JID مختلف لنفس المستخدم، لذلك استخدم رقم الهاتف كنسخة احتياطية.
+    if not last_invoice and mobile:
+        try:
+            cache_mobile = re.sub(r"\D", "", str(mobile))
+            if cache_mobile:
+                last_invoice = frappe.cache().get_value(
+                    f"hagag_ai_last_invoice_mobile:{cache_mobile}"
+                )
+        except Exception:
+            last_invoice = None
+
+    question_invoice = re.search(r"ACC-SINV-[A-Za-z0-9-]+", question or "")
+    if question_invoice:
+        candidate_invoice = question_invoice.group(0)
+        if frappe.db.exists("Sales Invoice", candidate_invoice):
+            last_invoice = candidate_invoice
+
+    if not last_invoice:
+        for item in reversed(history):
+            text = item.get("text", "")
+            match = re.search(
+                r"ACC-SINV-[A-Za-z0-9-]+",
+                text,
+            )
+            if match and frappe.db.exists("Sales Invoice", match.group(0)):
+                last_invoice = match.group(0)
+                break
+
+    approval_words = [
+        "ايوة",
+        "أيوة",
+        "ايوه",
+        "أيوه",
+        "نعم",
+        "اه",
+        "آه",
+        "تمام",
+        "موافق",
+    ]
+
+    pdf_words = [
+        "pdf",
+        "بي دي اف",
+        "بي ديإف",
+        "ابعته",
+        "ابعتها",
+        "ابعت",
+        "أرسلها",
+        "ارسله",
+    ]
+
+    invoice_only_request = bool(
+        question_invoice
+        and re.fullmatch(r"\s*ACC-SINV-[A-Za-z0-9-]+\s*", question or "")
+    )
+
+    pdf_request = (
+        any(x in q_lower for x in pdf_words)
+        or (
+            any(x in q_lower for x in approval_words)
+            and last_invoice
+        )
+        or (
+            invoice_only_request
+            and last_invoice
+        )
+    )
+
+    if pdf_request and last_invoice:
+        messages.append(
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": (
+                            "مهم: الفاتورة المؤكدة في سياق هذه المحادثة هي "
+                            + last_invoice
+                            + ". المستخدم يطلب الآن إرسالها PDF أو وافق "
+                              "على إرسالها. استدعِ send_invoice_pdf الآن "
+                              "باستخدام هذه الفاتورة."
+                        )
+                    }
+                ],
+            }
+        )
+    else:
+        current_parts = [{"text": question}]
+        if pdf_base64:
+            current_parts.append(
+                {
+                    "inline_data": {
+                        "mime_type": "application/pdf",
+                        "data": str(pdf_base64),
+                    }
+                }
+            )
+        messages.append(
+            {
+                "role": "user",
+                "parts": current_parts,
+            }
+        )
+
+    max_steps = 6
 
     for step in range(max_steps):
         payload = {
-            "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+            "systemInstruction": {
+                "parts": [{"text": SYSTEM_INSTRUCTION}]
+            },
             "contents": messages,
+            "tools": gemini_tools,
         }
-        if gemini_tools:
-            payload["tools"] = gemini_tools
+
+        # عند طلب PDF نمنع Gemini من الرد بالكلام فقط.
+        if pdf_request and last_invoice:
+            payload["toolConfig"] = {
+                "functionCallingConfig": {
+                    "mode": "ANY",
+                    "allowedFunctionNames": ["send_invoice_pdf"],
+                }
+            }
 
         resp = gemini_call(payload)
+
         if "candidates" not in resp or not resp["candidates"]:
             frappe.throw("رد غير متوقع من Gemini.")
-        
-        model_parts = resp["candidates"][0]["content"].get("parts", [])
-        messages.append({"role": "model", "parts": model_parts})
 
-        fc_part = next((p for p in model_parts if "functionCall" in p), None)
+        model_parts = (
+            resp["candidates"][0]
+            .get("content", {})
+            .get("parts", [])
+        )
+
+        messages.append(
+            {
+                "role": "model",
+                "parts": model_parts,
+            }
+        )
+
+        fc_part = next(
+            (
+                p
+                for p in model_parts
+                if "functionCall" in p
+            ),
+            None,
+        )
 
         if fc_part:
             fc = fc_part["functionCall"]
-            mcp_res = mcp_call("tools/call", {"name": fc["name"], "arguments": fc.get("args", {})}, req_id=10 + step)
-            tool_result = mcp_res.get("result", mcp_res)
-            messages.append({"role": "user", "parts": [{"functionResponse": {"name": fc["name"], "response": {"result": tool_result}}}]})
-        else:
-            text = next((p.get("text", "") for p in model_parts if "text" in p and not p.get("thought")), "تمت العملية.")
-            q_lower = (question or "").strip().lower()
-            action = None
+            function_name = fc.get("name", "")
+            args = fc.get("args", {}) or {}
 
-            if any(x in q_lower for x in ["قيد", "يومية", "يوميه", "مصروف", "مصاريف"]):
-                action = {"type": "open", "key": "journal_entry", "label": "📒 فتح قيد يومية"}
-            elif any(x in q_lower for x in ["مشروع"]):
-                action = {"type": "open", "key": "project", "label": "📁 فتح مشروع جديد"}
-            elif any(x in q_lower for x in ["فاتورة", "فاتوره", "مبيعات"]):
-                action = {"type": "open", "key": "sales_invoice", "label": "🧾 فتح فاتورة مبيعات جديدة"}
-            elif any(x in q_lower for x in ["عميل", "زبون"]):
-                action = {"type": "open", "key": "customer", "label": "👤 إضافة عميل جديد"}
-            elif any(x in q_lower for x in ["عرض سعر", "عرض اسعار", "تسعير"]):
-                action = {"type": "open", "key": "quotation", "label": "📝 فتح عرض سعر جديد"}
-            elif any(x in q_lower for x in ["مهمة", "مهمه", "مهام", "تاسك"]):
-                action = {"type": "open", "key": "task", "label": "📋 فتح مهمة جديدة"}
+            # أداة PDF: تنفيذ محلي آمن بعد طلب Gemini.
+            if function_name == "send_invoice_pdf":
+                invoice_name = str(
+                    args.get("invoice_name", "")
+                ).strip()
 
-            result = {"status": "success", "message": text}
-            if action:
-                result["action"] = action
-            return result
+                if (
+                    not conversation_id
+                    or not mobile
+                    or not invoice_name
+                    or not frappe.db.exists(
+                        "Sales Invoice",
+                        invoice_name,
+                    )
+                ):
+                    tool_result = {
+                        "status": "error",
+                        "message": "الفاتورة المطلوبة غير موجودة.",
+                    }
+                else:
+                    try:
+                        tool_result = send_invoice_whatsapp(
+                            invoice_name,
+                            mobile,
+                        )
+                    except Exception as e:
+                        frappe.log_error(
+                            frappe.get_traceback(),
+                            "Hagag AI PDF Send Error",
+                        )
+                        tool_result = {
+                            "status": "error",
+                            "message": "فشل إرسال ملف الفاتورة.",
+                        }
 
-    return {"status": "warning", "message": "استغرق وقتاً طويلاً. حاول تبسيط السؤال."}
+            # أدوات MCP: القراءة متاحة، والكتابة لا تُنفذ إلا بطلب صريح.
+            else:
+                read_tool = function_name.lower().endswith(("_list", "_get"))
+                write_markers = (
+                    "_create", "_update", "_delete", "_submit",
+                    "_cancel", "_assign", "_unassign", "_insert",
+                    "_rename", "_add", "_remove", "_set",
+                )
+                write_tool = any(
+                    marker in function_name.lower()
+                    for marker in write_markers
+                )
+                explicit_execute = any(
+                    phrase in question.lower()
+                    for phrase in (
+                        "نفذ", "نفّذ", "نفّذها", "نفذها",
+                        "اعمل", "أنشئ", "انشئ", "أنشأ",
+                        "عدل", "عدّل", "حدث", "حدّث",
+                        "احذف", "إحذف", "اعتمد", "اعتماد",
+                        "الغ", "ألغ", "إلغاء",
+                    )
+                )
+
+                if write_tool and not explicit_execute:
+                    tool_result = {
+                        "status": "blocked",
+                        "message": (
+                            "تم منع تنفيذ عملية الكتابة لأن المستخدم لم يطلب "
+                            "التنفيذ صراحة. اعرض Preview واطلب تأكيد التنفيذ."
+                        ),
+                    }
+                elif read_tool or write_tool:
+                    mcp_res = mcp_call(
+                        "tools/call",
+                        {
+                            "name": function_name,
+                            "arguments": args,
+                        },
+                        req_id=10 + step,
+                    )
+                    tool_result = mcp_res.get(
+                        "result",
+                        mcp_res,
+                    )
+                else:
+                    # أدوات MCP غير مصنفة كقراءة/كتابة: لا ننفذها تلقائياً.
+                    tool_result = {
+                        "status": "blocked",
+                        "message": "الأداة غير مصنفة ولا يُسمح بتنفيذها تلقائياً.",
+                    }
+
+            messages.append(
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "functionResponse": {
+                                "name": function_name,
+                                "response": {
+                                    "result": tool_result
+                                },
+                            }
+                        }
+                    ],
+                }
+            )
+
+            # بعد تنفيذ الأداة، نسمح لـ Gemini بصياغة الرد النهائي.
+            pdf_request = False
+            continue
+
+        text = next(
+            (
+                p.get("text", "")
+                for p in model_parts
+                if "text" in p and not p.get("thought")
+            ),
+            "تمت العملية.",
+        )
+
+        # حفظ الذاكرة
+        if conversation_id:
+            try:
+                history.append(
+                    {
+                        "role": "user",
+                        "text": question,
+                    }
+                )
+                history.append(
+                    {
+                        "role": "model",
+                        "text": text,
+                    }
+                )
+
+                frappe.cache().set_value(
+                    memory_key,
+                    history[-15:],
+                    expires_in_sec=86400,
+                )
+            except Exception:
+                pass
+
+        # حفظ آخر فاتورة ظهرت في رد Gemini.
+        invoice_match = re.search(
+            r"ACC-SINV-[A-Za-z0-9-]+",
+            text,
+        )
+
+        if conversation_id and invoice_match:
+            try:
+                invoice_name = invoice_match.group(0)
+
+                if frappe.db.exists("Sales Invoice", invoice_name):
+                    frappe.cache().set_value(
+                        f"hagag_ai_last_invoice:{conversation_id}",
+                        invoice_name,
+                        expires_in_sec=86400,
+                    )
+
+                    if mobile:
+                        cache_mobile = re.sub(r"\D", "", str(mobile))
+                        if cache_mobile:
+                            frappe.cache().set_value(
+                                f"hagag_ai_last_invoice_mobile:{cache_mobile}",
+                                invoice_name,
+                                expires_in_sec=86400,
+                            )
+
+                    # ضم رقم الفاتورة للذاكرة نفسها، كنسخة احتياطية.
+                    history.append({
+                        "role": "context",
+                        "text": f"الفاتورة الحالية في المحادثة: {invoice_name}",
+                    })
+                    frappe.cache().set_value(
+                        memory_key,
+                        history[-15:],
+                        expires_in_sec=86400,
+                    )
+            except Exception:
+                pass
+
+        return {
+            "status": "success",
+            "message": text,
+        }
+
+    return {
+        "status": "warning",
+        "message": "استغرق وقتاً طويلاً. حاول تبسيط السؤال.",
+    }

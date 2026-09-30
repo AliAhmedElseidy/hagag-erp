@@ -1,5 +1,6 @@
 import frappe
 import json
+import base64
 import urllib.request
 import urllib.error
 import time
@@ -20,6 +21,12 @@ SYSTEM_INSTRUCTION = """أنت مساعد حجاج الذكي والمستقل �
 7. لا تخمن رقم فاتورة. استخدم رقم الفاتورة الذي حصلت عليه من أدوات النظام أو من سياق المحادثة.
 8. تحدث بالعربية المصرية وباختصار شديد.
 9. لا تشرح خطواتك الداخلية ولا تذكر الأدوات للمستخدم.
+10. حافظ على نوع المستند من سياق المحادثة: عرض السعر ليس فاتورة، وأمر البيع ليس فاتورة، والقيد ليس فاتورة.
+11. إذا قال المستخدم "بتاع ساس" أو "بتاع العميل" بعد قائمة مستندات، استخدم المستند المحدد من السياق بعد التحقق منه ولا تستبدله بآخر فاتورة محفوظة.
+12. لإرسال أي PDF استخدم send_document_pdf مع نوع المستند واسمه الصحيحين. لا تستخدم send_invoice_pdf إلا لـ Sales Invoice.
+13. بعد أي عملية كتابة عبر MCP، نفّذ قراءة تحقق جديدة من النظام قبل الرد النهائي.
+14. في العمليات المحاسبية تحقق من شجرة الحسابات الحالية، وأن الحسابات حسابات دفترية للشركة وليست Group Accounts، وأن إجمالي المدين يساوي إجمالي الدائن قبل التنفيذ.
+15. لا تستخدم حسابًا قريبًا بدل الحساب الصحيح. إذا لم يوجد الحساب المناسب، اطلب اختيار حساب موجود أو طلب إنشاء الحساب.
 
 
 قواعد التعامل مع PDF المرفق:
@@ -304,26 +311,45 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
         for t in safe_mcp_tools
     ]
 
-    # أداة PDF محلية ينفذها الـ Gateway بعد أن يطلبها Gemini.
+    # أدوات PDF محلية. الأداة العامة تحافظ على نوع المستند.
+    gemini_declarations.append(
+        {
+            "name": "send_document_pdf",
+            "description": (
+                "إرسال PDF لأي مستند موجود بالفعل إلى نفس رقم واتساب. "
+                "استخدمها لـ Quotation أو Sales Invoice أو Sales Order أو غيرها. "
+                "يجب تمرير doctype وdocument_name الصحيحين. لا تحول عرض السعر إلى فاتورة."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "doctype": {
+                        "type": "string",
+                        "description": "نوع المستند الفعلي مثل Quotation أو Sales Invoice"
+                    },
+                    "document_name": {
+                        "type": "string",
+                        "description": "اسم المستند الفعلي في النظام"
+                    },
+                },
+                "required": ["doctype", "document_name"],
+            },
+        }
+    )
+
     gemini_declarations.append(
         {
             "name": "send_invoice_pdf",
             "description": (
-                "إرسال PDF لفاتورة مبيعات موجودة بالفعل إلى نفس رقم واتساب "
-                "صاحب المحادثة. إذا كانت الفاتورة محددة في سياق المحادثة "
-                "واستخدم المستخدم عبارات مثل ابعتهالي PDF أو ابعتها أو أيوة "
-                "بعد سؤال التأكيد، يجب استدعاء هذه الأداة مباشرة بدون سؤال "
-                "المستخدم عن رقم الفاتورة مرة أخرى."
+                "إرسال PDF لـ Sales Invoice فقط. ممنوع استخدامها لعروض الأسعار "
+                "أو أوامر البيع أو أي مستند آخر."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "invoice_name": {
                         "type": "string",
-                        "description": (
-                            "اسم فاتورة المبيعات الفعلي، مثل "
-                            "ACC-SINV-2026-00001-1"
-                        ),
+                        "description": "اسم Sales Invoice الفعلي"
                     }
                 },
                 "required": ["invoice_name"],
@@ -370,6 +396,40 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
 
     # لو المستخدم قال "أيوة" بعد سؤال تأكيد، نخلي السياق صريح جداً.
     q_lower = (question or "").strip().lower()
+
+    # آخر مستند معروف في سياق المحادثة.
+    last_document = None
+    document_patterns = [
+        (r"SAL-QTN-[A-Za-z0-9-]+", "Quotation"),
+        (r"ACC-SINV-[A-Za-z0-9-]+", "Sales Invoice"),
+        (r"SAL-ORD-[A-Za-z0-9-]+", "Sales Order"),
+        (r"ACC-PINV-[A-Za-z0-9-]+", "Purchase Invoice"),
+        (r"PUR-ORD-[A-Za-z0-9-]+", "Purchase Order"),
+        (r"ACC-JV-[A-Za-z0-9-]+", "Journal Entry"),
+    ]
+
+    for item in reversed(history):
+        htext = str(item.get("text", ""))
+        for pattern, doctype in document_patterns:
+            match = re.search(pattern, htext)
+            if match:
+                last_document = {
+                    "doctype": doctype,
+                    "name": match.group(0),
+                }
+                break
+        if last_document:
+            break
+
+    # المستند الموجود في السؤال الحالي له الأولوية.
+    for pattern, doctype in document_patterns:
+        match = re.search(pattern, question or "")
+        if match:
+            last_document = {
+                "doctype": doctype,
+                "name": match.group(0),
+            }
+            break
 
     last_invoice = None
 
@@ -441,7 +501,7 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
         any(x in q_lower for x in pdf_words)
         or (
             any(x in q_lower for x in approval_words)
-            and last_invoice
+            and last_document
         )
         or (
             invoice_only_request
@@ -449,18 +509,38 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
         )
     )
 
-    if pdf_request and last_invoice:
+    if pdf_request and last_document:
         messages.append(
             {
                 "role": "user",
                 "parts": [
                     {
                         "text": (
-                            "مهم: الفاتورة المؤكدة في سياق هذه المحادثة هي "
+                            "المستند المؤكد في السياق هو "
+                            + last_document["doctype"]
+                            + " باسم "
+                            + last_document["name"]
+                            + ". المستخدم يطلب إرسال هذا المستند PDF. "
+                            "استخدم send_document_pdf بنفس النوع والاسم. "
+                            "ممنوع استبداله بفاتورة أو بأي مستند آخر."
+                        )
+                    }
+                ],
+            }
+        )
+    elif pdf_request and last_invoice:
+        messages.append(
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": (
+                            "الفاتورة المؤكدة هي "
                             + last_invoice
-                            + ". المستخدم يطلب الآن إرسالها PDF أو وافق "
-                              "على إرسالها. استدعِ send_invoice_pdf الآن "
-                              "باستخدام هذه الفاتورة."
+                            + ". استخدم send_document_pdf مع "
+                            "doctype=Sales Invoice وdocument_name="
+                            + last_invoice
+                            + "."
                         )
                     }
                 ],
@@ -484,7 +564,9 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
             }
         )
 
-    max_steps = 6
+    max_steps = 8
+    verification_pending = False
+    verification_requested = False
 
     for step in range(max_steps):
         payload = {
@@ -536,39 +618,98 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
             function_name = fc.get("name", "")
             args = fc.get("args", {}) or {}
 
-            # أداة PDF: تنفيذ محلي آمن بعد طلب Gemini.
-            if function_name == "send_invoice_pdf":
-                invoice_name = str(
-                    args.get("invoice_name", "")
-                ).strip()
+            # إرسال PDF لأي نوع مستند مع الحفاظ على النوع والاسم.
+            if function_name in ("send_document_pdf", "send_invoice_pdf"):
+                if function_name == "send_invoice_pdf":
+                    doctype = "Sales Invoice"
+                    document_name = str(
+                        args.get("invoice_name", "")
+                    ).strip()
+                else:
+                    doctype = str(
+                        args.get("doctype", "")
+                    ).strip()
+                    document_name = str(
+                        args.get("document_name", "")
+                    ).strip()
 
                 if (
                     not conversation_id
                     or not mobile
-                    or not invoice_name
-                    or not frappe.db.exists(
-                        "Sales Invoice",
-                        invoice_name,
-                    )
+                    or not doctype
+                    or not document_name
                 ):
                     tool_result = {
                         "status": "error",
-                        "message": "الفاتورة المطلوبة غير موجودة.",
+                        "message": "بيانات المستند أو المحادثة غير مكتملة.",
+                    }
+                elif not frappe.db.exists(doctype, document_name):
+                    tool_result = {
+                        "status": "error",
+                        "message": "المستند المطلوب غير موجود.",
                     }
                 else:
                     try:
-                        tool_result = send_invoice_whatsapp(
-                            invoice_name,
-                            mobile,
+                        mobile_clean = (
+                            str(mobile)
+                            .strip()
+                            .replace(" ", "")
+                            .replace("-", "")
                         )
-                    except Exception as e:
+
+                        if mobile_clean.startswith("00"):
+                            mobile_clean = mobile_clean[2:]
+                        elif mobile_clean.startswith("0") and len(mobile_clean) == 10:
+                            mobile_clean = "966" + mobile_clean[1:]
+
+                        pdf = frappe.get_print(
+                            doctype,
+                            document_name,
+                            as_pdf=True,
+                        )
+
+                        payload = json.dumps(
+                            {
+                                "number": mobile_clean,
+                                "message": (
+                                    f"مستند {document_name} "
+                                    "من حجاج للمقاولات"
+                                ),
+                                "pdf_base64": base64.b64encode(
+                                    pdf
+                                ).decode("ascii"),
+                                "filename": document_name + ".pdf",
+                            }
+                        ).encode("utf-8")
+
+                        req = urllib.request.Request(
+                            "http://wa-baileys:3000/send",
+                            data=payload,
+                            headers={
+                                "Content-Type": "application/json",
+                                "Authorization": (
+                                    "Bearer HAGAG_WA_7f3c9a2d6e4b8a1c"
+                                ),
+                            },
+                            method="POST",
+                        )
+
+                        with urllib.request.urlopen(
+                            req,
+                            timeout=30,
+                        ) as resp:
+                            tool_result = json.loads(
+                                resp.read().decode("utf-8")
+                            )
+
+                    except Exception:
                         frappe.log_error(
                             frappe.get_traceback(),
                             "Hagag AI PDF Send Error",
                         )
                         tool_result = {
                             "status": "error",
-                            "message": "فشل إرسال ملف الفاتورة.",
+                            "message": "فشل إرسال ملف المستند PDF.",
                         }
 
             # جميع أدوات MCP متاحة للتنفيذ.
@@ -579,6 +720,51 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                     req_id=10 + step,
                 )
                 tool_result = mcp_res.get("result", mcp_res)
+
+                # بعد أي كتابة نطلب تحققًا جديدًا من النظام.
+                fn_lower = function_name.lower()
+
+                write_markers = (
+                    "create",
+                    "update",
+                    "delete",
+                    "submit",
+                    "cancel",
+                    "assign",
+                    "approve",
+                    "reject",
+                    "insert",
+                    "set",
+                    "rename",
+                    "duplicate",
+                    "restore",
+                    "close",
+                    "move",
+                    "add",
+                    "remove",
+                )
+
+                read_markers = (
+                    "get",
+                    "list",
+                    "search",
+                    "fetch",
+                    "read",
+                    "count",
+                    "report",
+                    "detail",
+                )
+
+                if any(x in fn_lower for x in write_markers):
+                    verification_pending = True
+                    verification_requested = False
+
+                elif (
+                    any(x in fn_lower for x in read_markers)
+                    and verification_pending
+                ):
+                    verification_pending = False
+                    verification_requested = False
 
             messages.append(
                 {
@@ -596,9 +782,54 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                 }
             )
 
-            # بعد تنفيذ الأداة، نسمح لـ Gemini بصياغة الرد النهائي.
+            # بعد الكتابة، نطلب من Gemini قراءة تحقق جديدة قبل الرد النهائي.
+            if verification_pending and not verification_requested:
+                messages.append(
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": (
+                                    "هذه نتيجة عملية كتابة. لا تُنهِ الرد بعد. "
+                                    "نفّذ الآن قراءة تحقق جديدة من النظام للتأكد "
+                                    "من وجود المستند/القيد وحالته. وفي العمليات "
+                                    "المحاسبية تحقق من الحسابات والمبالغ وتوازن "
+                                    "المدين والدائن."
+                                )
+                            }
+                        ],
+                    }
+                )
+                verification_requested = True
+
             pdf_request = False
             continue
+
+        if verification_pending:
+            if not verification_requested:
+                messages.append(
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": (
+                                    "لا تُنهِ الرد. يجب تنفيذ قراءة تحقق جديدة "
+                                    "من النظام الآن بعد عملية الكتابة."
+                                )
+                            }
+                        ],
+                    }
+                )
+                verification_requested = True
+                continue
+
+            return {
+                "status": "warning",
+                "message": (
+                    "تم تنفيذ العملية، لكن لم تكتمل قراءة التحقق النهائية. "
+                    "راجع المستند من النظام قبل الاعتماد."
+                ),
+            }
 
         text = next(
             (
@@ -633,11 +864,22 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
             except Exception:
                 pass
 
-        # حفظ آخر فاتورة ظهرت في رد Gemini.
+        # حفظ آخر مستند معروف في الذاكرة.
         invoice_match = re.search(
             r"ACC-SINV-[A-Za-z0-9-]+",
             text,
         )
+
+        document_match = None
+
+        for pattern, doctype in document_patterns:
+            match = re.search(pattern, text)
+            if match:
+                document_match = {
+                    "doctype": doctype,
+                    "name": match.group(0),
+                }
+                break
 
         if conversation_id and invoice_match:
             try:
@@ -669,6 +911,16 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                         history[-15:],
                         expires_in_sec=86400,
                     )
+            except Exception:
+                pass
+
+        if conversation_id and document_match:
+            try:
+                frappe.cache().set_value(
+                    f"hagag_ai_last_document:{conversation_id}",
+                    document_match,
+                    expires_in_sec=86400,
+                )
             except Exception:
                 pass
 

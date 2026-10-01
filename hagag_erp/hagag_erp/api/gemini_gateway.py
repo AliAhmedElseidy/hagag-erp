@@ -72,11 +72,13 @@ Accounting routing rule: When the user asks to pay, disburse, or transfer an Emp
 - قاعدة إلزامية لسلف الموظفين: حالة Employee Advance = "Paid" تعني فقط أن مبلغ السلفة تم دفعه للموظف، ولا تعني أن السلفة استُهلكت أو أُغلقت.
 - ممنوع منعًا باتًا استخدام status أو pending_amount للحكم على المبلغ المتاح للمطالبة من السلفة.
 - عند سؤال المستخدم عن المتاح من السلفة، يجب قراءة المستند الحالي من النظام والحصول صراحةً على الحقول: advance_amount وclaimed_amount وreturn_amount.
-- احسب المبلغ المتاح للمطالبة بهذه المعادلة فقط: available_amount = advance_amount - claimed_amount - return_amount.
-- pending_amount ليس المبلغ المتاح للمطالبة؛ لا تستخدمه في هذه المعادلة ولا تستنتج منه أن الرصيد المتاح صفر.
-- مثال إلزامي: إذا كانت advance_amount=1000 وclaimed_amount=0 وreturn_amount=0 وstatus=Paid وpending_amount=0، فالنتيجة الصحيحة هي available_amount=1000 ريال، وليس صفر.
-- إذا لم تظهر advance_amount أو claimed_amount أو return_amount في نتيجة القراءة، نفّذ قراءة أخرى للمستند نفسه بالحقول المطلوبة ولا تخمّن الرصيد.
-- لا تقل إن السلفة منتهية أو لا يوجد بها رصيد إلا إذا كان available_amount المحسوب بهذه المعادلة يساوي صفرًا أو أقل.
+- احسب المبلغ المتاح للتسوية من السلفة بناءً على المبلغ المدفوع فعليًا، وليس مبلغ الطلب: available_amount = max(paid_amount - claimed_amount - return_amount, 0).
+- advance_amount هو مبلغ السلفة المطلوب/المسجل، بينما paid_amount هو ما تم صرفه فعليًا؛ لا تسمح المطالبة بتجاوز paid_amount.
+- pending_amount ليس المبلغ المتاح للتسوية ولا تستخدمه بدل الحقول المحاسبية الفعلية.
+- مثال: إذا كانت advance_amount=1000 وpaid_amount=500 وclaimed_amount=0 وreturn_amount=0، فالمتاح للتسوية هو 500 ريال.
+- إذا لم تظهر paid_amount أو claimed_amount أو return_amount في نتيجة القراءة، نفّذ قراءة أخرى للمستند نفسه بالحقول المطلوبة ولا تخمّن الرصيد.
+- لا تقل إن السلفة منتهية أو لا يوجد بها رصيد إلا إذا كان available_amount المحسوب من paid_amount - claimed_amount - return_amount يساوي صفرًا أو أقل.
+- عند سؤال المستخدم عن "كام سلفة/عهدة" أو "فاضل كام"، استخدم أداة hagag_accounting_report إذا كانت متاحة للحصول على كشف وتجميع موحد من النظام.
 - عند تسجيل مصروف من سلفة، يجب أن يحتوي Expense Claim على رابط فعلي إلى Employee Advance من خلال جدول Expense Claim Advance، مع تخصيص مبلغ المصروف للسلفة، وليس مجرد ذكر رقم السلفة في الوصف أو النص.
 - بعد إنشاء Expense Claim المرتبط بالسلفة، أعد قراءة Expense Claim وEmployee Advance للتحقق من الربط والمبالغ، وتأكد أن claimed_amount في السلفة انعكس وفقًا للعملية التي نفذها النظام.
 - كل بند مصروف يجب أن يحتفظ بنوع المصروف ووصفه ومبلغه، ولا تدمج أنواع المصروفات المختلفة في بند واحد.
@@ -237,6 +239,247 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                         return parsed
 
         return None
+
+    def mcp_tool_call(tool_name, arguments=None, req_id=100):
+        response = mcp_call(
+            "tools/call",
+            {"name": tool_name, "arguments": dict(arguments or {})},
+            req_id=req_id,
+        )
+        result = response.get("result", response)
+        error = response.get("error")
+        if isinstance(result, dict):
+            if result.get("isError") is True:
+                error = result
+            elif result.get("error"):
+                error = result.get("error")
+        if error:
+            raise RuntimeError(str(error))
+        return result
+
+    def mcp_rows(result):
+        if not isinstance(result, dict):
+            return []
+        structured = result.get("structuredContent")
+        if isinstance(structured, dict):
+            data = structured.get("data")
+            if isinstance(data, list):
+                return data
+        data = result.get("data")
+        if isinstance(data, list):
+            return data
+        content = result.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                value = block.get("text")
+                if not isinstance(value, str):
+                    continue
+                try:
+                    parsed = json.loads(value)
+                except Exception:
+                    continue
+                if isinstance(parsed, dict) and isinstance(parsed.get("data"), list):
+                    return parsed["data"]
+        return []
+
+    def money(value):
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def accounting_report(report_type, company=None, employee=None,
+                          account=None, employee_advance=None, limit=5000):
+        limit = max(1, min(int(limit or 5000), 5000))
+
+        if report_type == "chart_of_accounts":
+            filters = []
+            if company:
+                filters.append(["company", "=", str(company).strip()])
+
+            result = mcp_tool_call(
+                "erpnext_doc_list",
+                {
+                    "doctype": "Account",
+                    "fields": [
+                        "name", "account_name", "parent_account", "root_type",
+                        "account_type", "is_group", "company",
+                        "account_currency", "disabled", "lft", "rgt",
+                    ],
+                    "filters": filters,
+                    "limit": limit,
+                    "order_by": "lft asc",
+                    "skip_cache": True,
+                },
+                101,
+            )
+            rows = mcp_rows(result)
+
+            return {
+                "status": "success",
+                "report": "chart_of_accounts",
+                "company": company,
+                "count": len(rows),
+                "truncated": len(rows) >= limit,
+                "data": rows,
+                "source": "ERPNext Account",
+            }
+
+        if report_type == "employee_advances":
+            filters = []
+            if company:
+                filters.append(["company", "=", str(company).strip()])
+            if employee:
+                filters.append(["employee", "=", str(employee).strip()])
+            if employee_advance:
+                filters.append(["name", "=", str(employee_advance).strip()])
+
+            result = mcp_tool_call(
+                "erpnext_doc_list",
+                {
+                    "doctype": "Employee Advance",
+                    "fields": [
+                        "name", "employee", "employee_name", "posting_date",
+                        "advance_amount", "paid_amount", "claimed_amount",
+                        "return_amount", "status", "company",
+                        "advance_account", "currency", "exchange_rate",
+                    ],
+                    "filters": filters,
+                    "limit": limit,
+                    "order_by": "posting_date desc, name desc",
+                    "skip_cache": True,
+                },
+                102,
+            )
+            rows = mcp_rows(result)
+            normalized = []
+            totals = {
+                "advance_amount": 0.0,
+                "paid_amount": 0.0,
+                "claimed_amount": 0.0,
+                "return_amount": 0.0,
+                "available_amount": 0.0,
+            }
+
+            for row in rows:
+                advance_amount = money(row.get("advance_amount"))
+                paid_amount = money(row.get("paid_amount"))
+                claimed_amount = money(row.get("claimed_amount"))
+                return_amount = money(row.get("return_amount"))
+                available = max(paid_amount - claimed_amount - return_amount, 0.0)
+
+                item = dict(row)
+                item["available_amount"] = available
+                item["outstanding_to_be_paid"] = max(
+                    advance_amount - paid_amount, 0.0
+                )
+                item["is_open"] = (
+                    str(row.get("status") or "") != "Cancelled"
+                    and (
+                        max(advance_amount - paid_amount, 0.0) > 0
+                        or available > 0
+                    )
+                )
+                normalized.append(item)
+
+                totals["advance_amount"] += advance_amount
+                totals["paid_amount"] += paid_amount
+                totals["claimed_amount"] += claimed_amount
+                totals["return_amount"] += return_amount
+                totals["available_amount"] += available
+
+            return {
+                "status": "success",
+                "report": "employee_advances",
+                "company": company,
+                "employee": employee,
+                "count": len(normalized),
+                "truncated": len(normalized) >= limit,
+                "totals": totals,
+                "data": normalized,
+                "calculation": "max(paid_amount - claimed_amount - return_amount, 0)",
+                "source": "ERPNext Employee Advance",
+            }
+
+        if report_type == "account_ledger":
+            if not account:
+                raise ValueError("account is required for account_ledger")
+            if not company:
+                raise ValueError("company is required for account_ledger")
+
+            requested_account = str(account).strip()
+
+            account_lookup = mcp_tool_call(
+                "erpnext_doc_list",
+                {
+                    "doctype": "Account",
+                    "fields": [
+                        "name", "account_name", "company",
+                        "account_type", "root_type", "is_group",
+                    ],
+                    "filters": [
+                        ["name", "=", requested_account],
+                        ["company", "=", str(company).strip()],
+                    ],
+                    "limit": 10,
+                    "skip_cache": True,
+                },
+                103,
+            )
+            account_rows = mcp_rows(account_lookup)
+
+            if not account_rows:
+                raise ValueError(
+                    f"الحساب '{requested_account}' غير موجود في شركة '{company}'"
+                )
+
+            resolved_account = account_rows[0].get("name") or requested_account
+
+            report_filters = {
+                "company": str(company).strip(),
+                "from_date": "2000-01-01",
+                "to_date": "2099-12-31",
+                "account": [resolved_account],
+            }
+
+            result = mcp_tool_call(
+                "erpnext_method_call",
+                {
+                    "method": "frappe.desk.query_report.run",
+                    "args": {
+                        "report_name": "General Ledger",
+                        "filters": json.dumps(
+                            report_filters, ensure_ascii=False
+                        ),
+                        "ignore_prepared_report": True,
+                    },
+                    "http_method": "POST",
+                },
+                103,
+            )
+
+            data = result.get("data") if isinstance(result, dict) else result
+            if not isinstance(data, dict):
+                raise ValueError("General Ledger returned an unexpected response")
+
+            rows = data.get("result") or data.get("data") or []
+            columns = data.get("columns") or []
+
+            return {
+                "status": "success",
+                "report": "account_ledger",
+                "account": resolved_account,
+                "requested_account": requested_account,
+                "company": company,
+                "count": len(rows) if isinstance(rows, list) else 0,
+                "data": rows,
+                "columns": columns,
+                "source": "ERPNext General Ledger",
+            }
+
+        raise ValueError("Unsupported accounting report type")
 
     def gemini_call(payload):
         for attempt in range(len(models) * 2):
@@ -417,6 +660,40 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
     ]
 
     # أدوات PDF محلية. الأداة العامة تحافظ على نوع المستند.
+    gemini_declarations.append(
+        {
+            "name": "hagag_accounting_report",
+            "description": (
+                "قراءة محاسبية متخصصة للبيانات الحالية من النظام. "
+                "استخدمها لشجرة الحسابات والسلف والعهد والمبالغ المدفوعة "
+                "والمستخدمة والمتبقية وحركة ورصيد الحساب. للقراءة فقط."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "report_type": {
+                        "type": "string",
+                        "enum": [
+                            "chart_of_accounts",
+                            "employee_advances",
+                            "account_ledger",
+                        ],
+                    },
+                    "company": {"type": "string"},
+                    "employee": {"type": "string"},
+                    "account": {"type": "string"},
+                    "employee_advance": {"type": "string"},
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5000,
+                    },
+                },
+                "required": ["report_type"],
+            },
+        }
+    )
+
     gemini_declarations.append(
         {
             "name": "send_document_pdf",
@@ -781,8 +1058,28 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                     pdf_request = False
                     continue
 
+            # تقرير محاسبي متخصص للقراءة فقط.
+            if function_name == "hagag_accounting_report":
+                try:
+                    tool_result = accounting_report(
+                        report_type=str(args.get("report_type") or "").strip(),
+                        company=args.get("company"),
+                        employee=args.get("employee"),
+                        account=args.get("account"),
+                        employee_advance=args.get("employee_advance"),
+                        limit=args.get("limit", 5000),
+                    )
+                    write_failed = False
+                except Exception as e:
+                    tool_result = {
+                        "status": "error",
+                        "operation": function_name,
+                        "message": f"فشل التقرير المحاسبي: {str(e)[:800]}",
+                    }
+                    write_failed = True
+
             # إرسال PDF لأي نوع مستند مع الحفاظ على النوع والاسم.
-            if function_name == "erpnext_doc_create":
+            elif function_name == "erpnext_doc_create":
                 create_doctype = str(args.get("doctype") or "").strip()
                 if create_doctype == "Expense Claim":
                     tool_result = {
@@ -971,7 +1268,10 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                     "detail",
                 )
 
-                if any(x in fn_lower for x in write_markers):
+                if function_name == "hagag_accounting_report":
+                    verification_pending = False
+                    verification_requested = False
+                elif any(x in fn_lower for x in write_markers):
                     if write_failed:
                         verification_pending = False
                         verification_requested = False

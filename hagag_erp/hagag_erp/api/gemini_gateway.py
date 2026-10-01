@@ -460,7 +460,7 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                 103,
             )
 
-            data = (result.get("structuredContent") or {}).get("data") if isinstance(result, dict) else result
+            data = mcp_result_data(result)
             if not isinstance(data, dict):
                 raise ValueError("General Ledger returned an unexpected response")
 
@@ -995,7 +995,6 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
         else None
     )
 
-    frappe.logger("hagag_erp").warning("ACCOUNTING ROUTING DEBUG question=%r q_lower=%r ledger=%r tree=%r advances=%r forced=%r", question, q_lower, accounting_ledger_request, accounting_tree_request, employee_advances_request, forced_accounting_report)
     if forced_accounting_report:
         messages.append(
             {
@@ -1039,7 +1038,7 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                     "allowedFunctionNames": ["send_invoice_pdf"],
                 }
             }
-        elif forced_accounting_report:
+        elif forced_accounting_report and step == 0:
             # Force specialized accounting routing for accounting-report intents.
             payload["toolConfig"] = {
                 "functionCallingConfig": {

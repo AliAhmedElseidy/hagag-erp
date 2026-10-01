@@ -66,9 +66,9 @@ Accounting routing rule: When the user asks to pay, disburse, or transfer an Emp
 
 قواعد سلف الموظفين ومصروفاتهم:
 - استخدم Employee Advance لإدارة سلفة الموظف، وExpense Claim لتسجيل المصروفات الفعلية.
-- استخدم أدوات MCP العامة erpnext_doc_list وerpnext_doc_get وerpnext_doc_create وerpnext_doc_update وغيرها عند الحاجة، لأن Employee Advance وExpense Claim قد لا يكون لهما أدوات متخصصة.
+- استخدم أدوات MCP المتخصصة عندما تكون متاحة، ولا تستخدم erpnext_doc_create لإنشاء Expense Claim.
 - عند طلب إنشاء سلفة، ابحث أولاً عن الموظف والشركة والعملة والحساب/طريقة الدفع المناسبة من النظام، ثم أنشئ Employee Advance بالحقول الفعلية المطلوبة.
-- عند تسجيل مصروف من سلفة: ابحث عن Employee Advance الصحيح للموظف، ثم أنشئ Expense Claim وبنود Expense Claim Detail، ثم اربطه بالسلفة من خلال Expense Claim Advance.
+- عند تسجيل مصروف من سلفة: استخدم حصراً أداة erpnext_expense_claim_create إذا كانت متاحة، ولا تستخدم erpnext_doc_create لإنشاء Expense Claim. يجب أن يكون Expense Claim مرتبطاً فعلياً بالسلفة من خلال advances/Expense Claim Advance.
 - قاعدة إلزامية لسلف الموظفين: حالة Employee Advance = "Paid" تعني فقط أن مبلغ السلفة تم دفعه للموظف، ولا تعني أن السلفة استُهلكت أو أُغلقت.
 - ممنوع منعًا باتًا استخدام status أو pending_amount للحكم على المبلغ المتاح للمطالبة من السلفة.
 - عند سؤال المستخدم عن المتاح من السلفة، يجب قراءة المستند الحالي من النظام والحصول صراحةً على الحقول: advance_amount وclaimed_amount وreturn_amount.
@@ -527,10 +527,6 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
     pdf_request = (
         any(x in q_lower for x in pdf_words)
         or (
-            any(x in q_lower for x in approval_words)
-            and last_document
-        )
-        or (
             invoice_only_request
             and last_invoice
         )
@@ -646,6 +642,37 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
             args = fc.get("args", {}) or {}
 
             # إرسال PDF لأي نوع مستند مع الحفاظ على النوع والاسم.
+            if function_name == "erpnext_doc_create":
+                create_doctype = str(args.get("doctype") or "").strip()
+                if create_doctype == "Expense Claim":
+                    tool_result = {
+                        "status": "error",
+                        "operation": function_name,
+                        "message": (
+                            "Expense Claim يجب إنشاؤه حصراً باستخدام "
+                            "erpnext_expense_claim_create. "
+                            "أعد المحاولة باستخدام الأداة المتخصصة."
+                        ),
+                    }
+                    write_failed = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "parts": [
+                                {
+                                    "functionResponse": {
+                                        "name": function_name,
+                                        "response": {
+                                            "result": tool_result
+                                        },
+                                    }
+                                }
+                            ],
+                        }
+                    )
+                    pdf_request = False
+                    continue
+
             if function_name in ("send_document_pdf", "send_invoice_pdf"):
                 if function_name == "send_invoice_pdf":
                     doctype = "Sales Invoice"

@@ -61,6 +61,31 @@ SYSTEM_INSTRUCTION = """أنت مساعد حجاج الذكي والمستقل �
 - لا تقترح القيد المحاسبي النهائي إلا بعد إتمام مطابقة الحسابات مع شجرة الحسابات الحالية.
 - لا ترسل أي فاتورة أو مستند تلقائيًا لمجرد أن المستخدم قال إن الإجابة صحيحة أو شكر المساعد.
 - لا تخترع أسماء أو أرقام مستندات أو مبالغ أو تواريخ أو حسابات.
+
+قواعد سلف الموظفين ومصروفاتهم:
+- استخدم Employee Advance لإدارة سلفة الموظف، وExpense Claim لتسجيل المصروفات الفعلية.
+- استخدم أدوات MCP العامة erpnext_doc_list وerpnext_doc_get وerpnext_doc_create وerpnext_doc_update وغيرها عند الحاجة، لأن Employee Advance وExpense Claim قد لا يكون لهما أدوات متخصصة.
+- عند طلب إنشاء سلفة، ابحث أولاً عن الموظف والشركة والعملة والحساب/طريقة الدفع المناسبة من النظام، ثم أنشئ Employee Advance بالحقول الفعلية المطلوبة.
+- عند تسجيل مصروف من سلفة: ابحث عن Employee Advance الصحيح للموظف، ثم أنشئ Expense Claim وبنود Expense Claim Detail، ثم اربطه بالسلفة من خلال Expense Claim Advance.
+- قاعدة إلزامية لسلف الموظفين: حالة Employee Advance = "Paid" تعني فقط أن مبلغ السلفة تم دفعه للموظف، ولا تعني أن السلفة استُهلكت أو أُغلقت.
+- ممنوع منعًا باتًا استخدام status أو pending_amount للحكم على المبلغ المتاح للمطالبة من السلفة.
+- عند سؤال المستخدم عن المتاح من السلفة، يجب قراءة المستند الحالي من النظام والحصول صراحةً على الحقول: advance_amount وclaimed_amount وreturn_amount.
+- احسب المبلغ المتاح للمطالبة بهذه المعادلة فقط: available_amount = advance_amount - claimed_amount - return_amount.
+- pending_amount ليس المبلغ المتاح للمطالبة؛ لا تستخدمه في هذه المعادلة ولا تستنتج منه أن الرصيد المتاح صفر.
+- مثال إلزامي: إذا كانت advance_amount=1000 وclaimed_amount=0 وreturn_amount=0 وstatus=Paid وpending_amount=0، فالنتيجة الصحيحة هي available_amount=1000 ريال، وليس صفر.
+- إذا لم تظهر advance_amount أو claimed_amount أو return_amount في نتيجة القراءة، نفّذ قراءة أخرى للمستند نفسه بالحقول المطلوبة ولا تخمّن الرصيد.
+- لا تقل إن السلفة منتهية أو لا يوجد بها رصيد إلا إذا كان available_amount المحسوب بهذه المعادلة يساوي صفرًا أو أقل.
+- عند تسجيل مصروف من سلفة، يجب أن يحتوي Expense Claim على رابط فعلي إلى Employee Advance من خلال جدول Expense Claim Advance، مع تخصيص مبلغ المصروف للسلفة، وليس مجرد ذكر رقم السلفة في الوصف أو النص.
+- بعد إنشاء Expense Claim المرتبط بالسلفة، أعد قراءة Expense Claim وEmployee Advance للتحقق من الربط والمبالغ، وتأكد أن claimed_amount في السلفة انعكس وفقًا للعملية التي نفذها النظام.
+- كل بند مصروف يجب أن يحتفظ بنوع المصروف ووصفه ومبلغه، ولا تدمج أنواع المصروفات المختلفة في بند واحد.
+- Expense Claim Type يحتوي على أنواع المصروفات، والحساب الافتراضي للشركة موجود في جدول Expense Claim Account المرتبط به. ابحث عن الـmapping الفعلي قبل إنشاء المصروف.
+- لا تستخدم أسماء أو أرقام حسابات ثابتة داخل إجاباتك أو عمليات الإنشاء. الحسابات يجب أن تأتي من بيانات الشركة الحالية.
+- لا تنشئ حساب GL لكل موظف. استخدم حساب السلف العام المهيأ في النظام مع تتبع الموظف من خلال Employee Advance وExpense Claim.
+- إذا لم يوجد Expense Claim Type مناسب أو لا يوجد default_account صالح للشركة، لا تخمن ولا تختار حساباً قريباً؛ أوقف الإنشاء واطلب تحديد الإعداد الصحيح.
+- عند سؤال المستخدم عن رصيد سلفة أو إجمالي مصروفات موظف أو إجمالي نوع مصروف، نفذ قراءة جديدة من النظام ولا تنشئ أي مستند.
+- مثال: إذا قال المستخدم "علي صرف 200 بنزين و50 مسامير من عهدته"، افهمها كمصروفين منفصلين مرتبطين بسلفة علي، وابحث عن النوع والحساب لكل بند قبل الإنشاء.
+- قبل أي إنشاء أو تعديل، تحقق من أن الموظف والسلفة والمبالغ والبنود المقصودة هي الموجودة فعلياً في النظام.
+- بعد أي إنشاء أو تعديل، اقرأ المستند الناتج من النظام وتحقق من الموظف والمبلغ والبنود والسلفة المرتبطة والحالة، ولا تقل إن العملية نجحت إلا بعد نجاح قراءة التحقق.
 """
 
 
@@ -719,9 +744,31 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                     {"name": function_name, "arguments": args},
                     req_id=10 + step,
                 )
-                tool_result = mcp_res.get("result", mcp_res)
 
-                # بعد أي كتابة نطلب تحققًا جديدًا من النظام.
+                # نتيجة MCP هي المصدر الوحيد للحكم على نجاح العملية.
+                # لا نعتبر الكتابة ناجحة إذا أعاد MCP خطأ.
+                mcp_result = mcp_res.get("result", mcp_res)
+                mcp_error = mcp_res.get("error")
+
+                if isinstance(mcp_result, dict):
+                    if mcp_result.get("isError") is True:
+                        mcp_error = mcp_result
+                    elif mcp_result.get("error"):
+                        mcp_error = mcp_result.get("error")
+
+                if mcp_error:
+                    tool_result = {
+                        "status": "error",
+                        "operation": function_name,
+                        "message": "فشلت العملية في النظام. لا تعتبر العملية ناجحة.",
+                        "details": mcp_error,
+                    }
+                    write_failed = True
+                else:
+                    tool_result = mcp_result
+                    write_failed = False
+
+                # بعد الكتابة الناجحة فقط نطلب تحققًا جديدًا من النظام.
                 fn_lower = function_name.lower()
 
                 write_markers = (
@@ -756,8 +803,12 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                 )
 
                 if any(x in fn_lower for x in write_markers):
-                    verification_pending = True
-                    verification_requested = False
+                    if write_failed:
+                        verification_pending = False
+                        verification_requested = False
+                    else:
+                        verification_pending = True
+                        verification_requested = False
 
                 elif (
                     any(x in fn_lower for x in read_markers)

@@ -460,7 +460,7 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                 103,
             )
 
-            data = result.get("data") if isinstance(result, dict) else result
+            data = (result.get("structuredContent") or {}).get("data") if isinstance(result, dict) else result
             if not isinstance(data, dict):
                 raise ValueError("General Ledger returned an unexpected response")
 
@@ -995,6 +995,7 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
         else None
     )
 
+    frappe.logger("hagag_erp").warning("ACCOUNTING ROUTING DEBUG question=%r q_lower=%r ledger=%r tree=%r advances=%r forced=%r", question, q_lower, accounting_ledger_request, accounting_tree_request, employee_advances_request, forced_accounting_report)
     if forced_accounting_report:
         messages.append(
             {
@@ -1158,6 +1159,25 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                         "message": f"فشل التقرير المحاسبي: {str(e)[:800]}",
                     }
                     write_failed = True
+                messages.append(
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "functionResponse": {
+                                    "name": function_name,
+                                    "response": {
+                                        "result": tool_result
+                                    },
+                                }
+                            }
+                        ],
+                    }
+                )
+                verification_pending = False
+                verification_requested = False
+                pdf_request = False
+                continue
 
             # إرسال PDF لأي نوع مستند مع الحفاظ على النوع والاسم.
             elif function_name == "erpnext_doc_create":

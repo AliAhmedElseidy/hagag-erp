@@ -664,9 +664,12 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
         {
             "name": "hagag_accounting_report",
             "description": (
-                "قراءة محاسبية متخصصة للبيانات الحالية من النظام. "
-                "استخدمها لشجرة الحسابات والسلف والعهد والمبالغ المدفوعة "
-                "والمستخدمة والمتبقية وحركة ورصيد الحساب. للقراءة فقط."
+                "أداة القراءة المحاسبية الرسمية والمتخصصة. "
+                "إلزامية لأسئلة شجرة الحسابات، السلف والعهد، حركة الحساب، "
+                "كشف الحساب، دفتر الأستاذ، رصيد الحساب والمدين والدائن. "
+                "لا تستخدم أدوات Account أو GL Entry أو Payment Entry العامة "
+                "بدلها في هذه الأسئلة. إذا ذكر المستخدم اسم حساب محدد، استخدم "
+                "نفس الاسم حرفيًا ولا تستبدله بحساب مشابه. الأداة للقراءة فقط."
             ),
             "parameters": {
                 "type": "object",
@@ -942,6 +945,76 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
             }
         )
 
+    # Deterministic accounting routing:
+    # Accounting-report questions must use the specialized read-only report
+    # instead of generic Account/GL/Payment Entry tools.
+    accounting_ledger_request = any(
+        phrase in q_lower
+        for phrase in (
+            "حركة حساب",
+            "حركة الحساب",
+            "كشف حساب",
+            "كشف الحساب",
+            "دفتر الأستاذ",
+            "دفتر الاستاذ",
+            "general ledger",
+            "ledger",
+            "رصيد حساب",
+            "رصيد الحساب",
+            "حركة مدين",
+            "حركة دائن",
+        )
+    )
+
+    accounting_tree_request = any(
+        phrase in q_lower
+        for phrase in (
+            "شجرة الحسابات",
+            "دليل الحسابات",
+            "chart of accounts",
+        )
+    )
+
+    employee_advances_request = any(
+        phrase in q_lower
+        for phrase in (
+            "سلف الموظفين",
+            "سلف الموظف",
+            "عهد الموظفين",
+            "عهدة الموظف",
+            "عهد الموظف",
+            "سلف وعهد",
+            "السلف والعهد",
+        )
+    )
+
+    forced_accounting_report = (
+        "account_ledger" if accounting_ledger_request
+        else "chart_of_accounts" if accounting_tree_request
+        else "employee_advances" if employee_advances_request
+        else None
+    )
+
+    if forced_accounting_report:
+        messages.append(
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": (
+                            "توجيه إلزامي لهذا الطلب: استخدم أداة "
+                            "`hagag_accounting_report` فقط للقراءة المحاسبية. "
+                            f"نوع التقرير المطلوب هو `{forced_accounting_report}`. "
+                            "لا تستخدم أدوات Account أو GL Entry أو Payment Entry "
+                            "العامة بدل التقرير المتخصص. "
+                            "إذا ذكر المستخدم اسم حساب محدد، مرر نفس اسم الحساب "
+                            "حرفيًا ولا تستبدله بحساب مشابه أو حساب آخر."
+                        )
+                    }
+                ],
+            }
+        )
+
     max_steps = 8
     verification_pending = False
     verification_requested = False
@@ -963,6 +1036,14 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                 "functionCallingConfig": {
                     "mode": "ANY",
                     "allowedFunctionNames": ["send_invoice_pdf"],
+                }
+            }
+        elif forced_accounting_report:
+            # Force specialized accounting routing for accounting-report intents.
+            payload["toolConfig"] = {
+                "functionCallingConfig": {
+                    "mode": "ANY",
+                    "allowedFunctionNames": ["hagag_accounting_report"],
                 }
             }
 

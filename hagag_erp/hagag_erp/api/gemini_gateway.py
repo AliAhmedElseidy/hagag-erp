@@ -160,6 +160,84 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
         except urllib.error.URLError as e:
             frappe.throw(f"فشل الاتصال بسيرفر MCP: {str(e)}")
 
+    def extract_document_refs(value):
+        """Collect document identifiers from MCP arguments/results."""
+        refs = set()
+        patterns = (
+            r"\bHR-EAD-[A-Za-z0-9-]+\b",
+            r"\bHR-EXP-[A-Za-z0-9-]+\b",
+            r"\bACC-PAY-[A-Za-z0-9-]+\b",
+            r"\bACC-JV-[A-Za-z0-9-]+\b",
+            r"\bACC-SINV-[A-Za-z0-9-]+\b",
+            r"\bSAL-QTN-[A-Za-z0-9-]+\b",
+            r"\bSAL-ORD-[A-Za-z0-9-]+\b",
+            r"\bACC-PINV-[A-Za-z0-9-]+\b",
+            r"\bPUR-ORD-[A-Za-z0-9-]+\b",
+        )
+
+        def walk(v):
+            if isinstance(v, dict):
+                for key, item in v.items():
+                    if key in (
+                        "name",
+                        "document_name",
+                        "docname",
+                        "employee_advance",
+                        "reference_name",
+                        "payment_entry_reference",
+                    ) and isinstance(item, str):
+                        value_text = item.strip()
+                        if value_text:
+                            refs.add(value_text)
+
+                    walk(item)
+
+            elif isinstance(v, (list, tuple)):
+                for item in v:
+                    walk(item)
+
+            elif isinstance(v, str):
+                for pattern in patterns:
+                    refs.update(re.findall(pattern, v))
+
+        walk(value)
+        return refs
+
+    def mcp_result_data(response):
+        """Extract structured MCP data from common MCP result shapes."""
+        if not isinstance(response, dict):
+            return None
+
+        result = response.get("result", response)
+
+        if isinstance(result, dict):
+            structured = result.get("structuredContent")
+            if isinstance(structured, dict):
+                return structured
+
+            data = result.get("data")
+            if isinstance(data, dict):
+                return data
+
+            content = result.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    text_value = block.get("text")
+                    if not isinstance(text_value, str):
+                        continue
+                    try:
+                        parsed = json.loads(text_value)
+                    except Exception:
+                        continue
+                    if isinstance(parsed, dict):
+                        if isinstance(parsed.get("data"), dict):
+                            return parsed["data"]
+                        return parsed
+
+        return None
+
     def gemini_call(payload):
         for attempt in range(len(models) * 2):
             current_model = models[attempt % len(models)]
@@ -590,6 +668,8 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
     max_steps = 8
     verification_pending = False
     verification_requested = False
+    verification_target_refs = set()
+    verification_expect_absent = False
 
     for step in range(max_steps):
         payload = {
@@ -640,6 +720,66 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
             fc = fc_part["functionCall"]
             function_name = fc.get("name", "")
             args = fc.get("args", {}) or {}
+
+            explicit_advance_match = re.search(
+                r"\bHR-EAD-[A-Za-z0-9-]+\b",
+                question or "",
+            )
+            explicit_advance_id = (
+                explicit_advance_match.group(0)
+                if explicit_advance_match
+                else None
+            )
+
+            # Deterministic HR guard: when the user explicitly names an Employee
+            # Advance, the Expense Claim must contain that exact advance link.
+            if (
+                function_name == "erpnext_expense_claim_create"
+                and explicit_advance_id
+            ):
+                advances = args.get("advances")
+
+                linked = False
+                if isinstance(advances, list):
+                    for row in advances:
+                        if (
+                            isinstance(row, dict)
+                            and str(row.get("employee_advance") or "").strip()
+                            == explicit_advance_id
+                        ):
+                            linked = True
+                            break
+
+                if not linked:
+                    tool_result = {
+                        "status": "error",
+                        "operation": function_name,
+                        "message": (
+                            "تم رفض إنشاء المصروف قبل التنفيذ: الطلب مرتبط "
+                            f"صراحةً بالسلفة {explicit_advance_id}، ويجب تمرير "
+                            "هذه السلفة فعليًا داخل advances في Expense Claim."
+                        ),
+                    }
+                    write_failed = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "parts": [
+                                {
+                                    "functionResponse": {
+                                        "name": function_name,
+                                        "response": {
+                                            "result": tool_result
+                                        },
+                                    }
+                                }
+                            ],
+                        }
+                    )
+                    verification_pending = False
+                    verification_requested = False
+                    pdf_request = False
+                    continue
 
             # إرسال PDF لأي نوع مستند مع الحفاظ على النوع والاسم.
             if function_name == "erpnext_doc_create":
@@ -835,16 +975,72 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                     if write_failed:
                         verification_pending = False
                         verification_requested = False
+                        verification_target_refs = set()
+                        verification_expect_absent = False
                     else:
                         verification_pending = True
                         verification_requested = False
+                        verification_target_refs = extract_document_refs(
+                            {
+                                "args": args,
+                                "result": tool_result,
+                            }
+                        )
+                        verification_expect_absent = (
+                            "delete" in fn_lower
+                        )
 
                 elif (
                     any(x in fn_lower for x in read_markers)
                     and verification_pending
                 ):
-                    verification_pending = False
-                    verification_requested = False
+                    read_refs = extract_document_refs(args)
+
+                    # A verification read is valid only when it targets the
+                    # exact document produced/changed by the preceding write.
+                    target_match = bool(
+                        verification_target_refs
+                        and verification_target_refs.intersection(read_refs)
+                    )
+
+                    if not target_match:
+                        verification_requested = True
+                        messages.append(
+                            {
+                                "role": "user",
+                                "parts": [
+                                    {
+                                        "text": (
+                                            "قراءة التحقق غير صحيحة. لا تعتمد "
+                                            "على هذه القراءة. يجب قراءة نفس "
+                                            "المستند الناتج عن عملية الكتابة "
+                                            "بالاسم/الرقم نفسه: "
+                                            + ", ".join(
+                                                sorted(
+                                                    verification_target_refs
+                                                )
+                                            )
+                                            + "."
+                                        )
+                                    }
+                                ],
+                            }
+                        )
+                    elif mcp_error:
+                        # For delete, a NOT FOUND result for the exact target
+                        # is the expected successful verification.
+                        if verification_expect_absent:
+                            verification_pending = False
+                            verification_requested = False
+                            verification_target_refs = set()
+                            verification_expect_absent = False
+                        else:
+                            verification_requested = True
+                    else:
+                        verification_pending = False
+                        verification_requested = False
+                        verification_target_refs = set()
+                        verification_expect_absent = False
 
             messages.append(
                 {

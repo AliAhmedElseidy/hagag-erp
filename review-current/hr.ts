@@ -766,6 +766,7 @@ export const hrTools: ErpNextTool[] = [
         expenseLines.push({
           expense_type: e.expense_type,
           amount: e.amount,
+          sanctioned_amount: e.amount,
           description: e.description ?? "",
           default_account: mapping.default_account,
         });
@@ -899,13 +900,11 @@ export const hrTools: ErpNextTool[] = [
           for (const row of rows) {
             if (remaining <= 0) break;
 
-            const advanceAmount = Number(
-              row.advance_amount ?? row.paid_amount ?? 0,
-            );
-            const claimedAmount = Number(row.claimed_amount ?? 0);
+            const advancePaid = Number(row.advance_paid ?? 0);
+            const unclaimedAmount = Number(row.unclaimed_amount ?? 0);
             const returnAmount = Number(row.return_amount ?? 0);
             const available = Math.max(
-              advanceAmount - claimedAmount - returnAmount,
+              unclaimedAmount - returnAmount,
               0,
             );
 
@@ -928,7 +927,9 @@ export const hrTools: ErpNextTool[] = [
             generatedRows.push({
               reference_type: row.reference_type,
               reference_name: row.reference_name,
-              advance_amount: Number(row.advance_amount ?? row.paid_amount ?? 0),
+              advance_paid: advancePaid,
+              unclaimed_amount: unclaimedAmount,
+              return_amount: returnAmount,
               allocated_amount: allocation,
               advance_account: row.advance_account,
               exchange_rate: Number(row.exchange_rate ?? 1),

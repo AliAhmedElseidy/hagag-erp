@@ -168,7 +168,9 @@ def create_draft_journal_entry(
     amount=None,
     cost_center=None,
     project=None,
-    user_remark=None
+    user_remark=None,
+    party_type=None,
+    party=None
 ):
     """
     Creates a Draft Journal Entry (docstatus = 0) with a debit line and credit line.
@@ -179,7 +181,6 @@ def create_draft_journal_entry(
         posting_date = frappe.utils.today()
 
     if not debit_account or not frappe.db.exists("Account", debit_account):
-        # Try finding account by name or code
         acc = frappe.db.get_value("Account", {"account_name": debit_account, "company": comp}, "name")
         if acc:
             debit_account = acc
@@ -209,6 +210,22 @@ def create_draft_journal_entry(
         proj = frappe.db.get_value("Project", {"project_name": project}, "name")
         project = proj if proj else None
 
+    # Check party requirements for debit and credit accounts
+    debit_doc = frappe.get_cached_value("Account", debit_account, ["account_type"], as_dict=True) or {}
+    credit_doc = frappe.get_cached_value("Account", credit_account, ["account_type"], as_dict=True) or {}
+
+    debit_party_type = None
+    debit_party = None
+    if debit_doc.get("account_type") in ["Receivable", "Payable"]:
+        debit_party_type = party_type or ("Customer" if debit_doc.get("account_type") == "Receivable" else "Supplier")
+        debit_party = party
+
+    credit_party_type = None
+    credit_party = None
+    if credit_doc.get("account_type") in ["Receivable", "Payable"]:
+        credit_party_type = party_type or ("Customer" if credit_doc.get("account_type") == "Receivable" else "Supplier")
+        credit_party = party
+
     # Create Journal Entry
     je = frappe.new_doc("Journal Entry")
     je.voucher_type = "Journal Entry"
@@ -217,22 +234,30 @@ def create_draft_journal_entry(
     je.user_remark = user_remark or f"قيد تم إنشاؤه عبر المساعد الذكي Elsaidy AI"
 
     # Line 1: Debit
-    je.append("accounts", {
+    debit_row = {
         "account": debit_account,
         "debit_in_account_currency": amt,
         "credit_in_account_currency": 0.0,
         "cost_center": cost_center,
         "project": project
-    })
+    }
+    if debit_party_type and debit_party:
+        debit_row["party_type"] = debit_party_type
+        debit_row["party"] = debit_party
+    je.append("accounts", debit_row)
 
     # Line 2: Credit
-    je.append("accounts", {
+    credit_row = {
         "account": credit_account,
         "debit_in_account_currency": 0.0,
         "credit_in_account_currency": amt,
         "cost_center": cost_center,
         "project": project
-    })
+    }
+    if credit_party_type and credit_party:
+        credit_row["party_type"] = credit_party_type
+        credit_row["party"] = credit_party
+    je.append("accounts", credit_row)
 
     je.docstatus = 0  # Draft
     je.flags.ignore_permissions = True

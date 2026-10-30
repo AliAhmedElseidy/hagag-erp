@@ -342,9 +342,7 @@ def sync_elsaidy_customizations():
     # 1. Update Raven Workspace
     try:
         if frappe.db.exists("Raven Workspace", "Raven"):
-            ws = frappe.get_doc("Raven Workspace", "Raven")
-            ws.workspace_name = "Elsaidy"
-            ws.save(ignore_permissions=True)
+            frappe.db.set_value("Raven Workspace", "Raven", "workspace_name", "Elsaidy")
             frappe.db.commit()
             print(" -> Raven Workspace renamed to 'Elsaidy'.")
     except Exception as e:

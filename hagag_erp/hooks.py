@@ -1,8 +1,8 @@
 app_name = "hagag_erp"
-app_title = "Hagag ERP"
-app_publisher = "Hagagco"
-app_description = "Custom Frappe app for Hagag ERP customizations"
-app_email = "info@hagagco.com"
+app_title = "Elsaidy ERP"
+app_publisher = "Elsaidy"
+app_description = "Custom Frappe app for Elsaidy ERP customizations"
+app_email = "info@elsaidy.com"
 app_license = "mit"
 
 # Apps
@@ -15,7 +15,7 @@ app_license = "mit"
 # 	{
 # 		"name": "hagag_erp",
 # 		"logo": "/assets/hagag_erp/logo.png",
-# 		"title": "Hagag ERP",
+# 		"title": "Elsaidy ERP",
 # 		"route": "/hagag_erp",
 # 		"has_permission": "hagag_erp.api.permission.has_app_permission"
 # 	}
@@ -208,59 +208,11 @@ app_license = "mit"
 # Request Events
 # ----------------
 # before_request = ["hagag_erp.utils.before_request"]
-# after_request = ["hagag_erp.utils.after_request"]
-
-# Job Events
-# ----------
-# before_job = ["hagag_erp.utils.before_job"]
-# after_job = ["hagag_erp.utils.after_job"]
-
-# User Data Protection
-# --------------------
-
-# user_data_fields = [
-# 	{
-# 		"doctype": "{doctype_1}",
-# 		"filter_by": "{filter_by}",
-# 		"redact_fields": ["{field_1}", "{field_2}"],
-# 		"partial": 1,
-# 	},
-# 	{
-# 		"doctype": "{doctype_2}",
-# 		"filter_by": "{filter_by}",
-# 		"partial": 1,
-# 	},
-# 	{
-# 		"doctype": "{doctype_3}",
-# 		"strict": False,
-# 	},
-# 	{
-# 		"doctype": "{doctype_4}"
-# 	}
-# ]
-
-# Authentication and authorization
-# --------------------------------
-
-# auth_hooks = [
-# 	"hagag_erp.auth.validate"
-# ]
-
-# Automatically update python controller files with type annotations for this app.
-# export_python_type_annotations = True
-
-# default_log_clearing_doctypes = {
-# 	"Logging DocType Name": 30  # days to retain logs
-# }
-
-# Translation
-# ------------
-# List of apps whose translatable strings should be excluded from this app's translations.
-# ignore_translatable_strings_from = []
-
-
 after_request = ["hagag_erp.hrms_inject.inject"]
 
+# Migration Events
+# ----------------
+after_migrate = ["hagag_erp.setup.sync_elsaidy_customizations"]
 
 app_include_css = ["/assets/hagag_erp/css/hagag_desk_v16.css"]
 app_include_js = ["/assets/hagag_erp/js/hagag_desk_v16.js", "/assets/hagag_erp/js/hagag_chat.js"]

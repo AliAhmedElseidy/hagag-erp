@@ -50,7 +50,7 @@
     panel.id = "hagag-chat-panel";
     panel.innerHTML = `
       <div id="hagag-chat-header">
-        <span>مساعد Hagag</span>
+        <span>مساعد Elsaidy AI</span>
         <span class="close">&times;</span>
       </div>
       <div id="hagag-chat-log"></div>
@@ -100,7 +100,7 @@
       addMessage(log, question, "hc-user");
       input.value = "";
       sendBtn.disabled = true;
-      const loading = addMessage(log, "بيفكر...", "hc-bot hc-loading");
+      const loading = addMessage(log, "جاري المعالجة...", "hc-bot hc-loading");
 
       frappe.call({
         method: "hagag_erp.api.gemini_gateway.ask_gemini",
@@ -114,13 +114,13 @@
               addAction(log, r.message.action);
             }
           } else {
-            addMessage(log, "معرفتش أجاوب على السؤال ده.", "hc-bot");
+            addMessage(log, "لم أتمكن من الإجابة على هذا السؤال.", "hc-bot");
           }
         },
         error: function () {
           loading.remove();
           sendBtn.disabled = false;
-          addMessage(log, "حصل خطأ في الاتصال. حاول تاني.", "hc-bot");
+          addMessage(log, "حدث خطأ في الاتصال. يرجى المحاولة لاحقاً.", "hc-bot");
         }
       });
     }

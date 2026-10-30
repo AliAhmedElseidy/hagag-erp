@@ -1,13 +1,13 @@
 {
-  "name": "Hagag HR",
-  "short_name": "Hagag HR",
+  "name": "Elsaidy HR",
+  "short_name": "Elsaidy HR",
   "start_url": "/hrms",
   "display": "standalone",
   "background_color": "#ffffff",
-  "lang": "en",
-  "dir": "ltr",
+  "lang": "ar",
+  "dir": "rtl",
   "scope": "/assets/hrms/frontend/",
-  "description": "Hagag HR - employee self-service",
+  "description": "Elsaidy HR - employee self-service",
   "theme_color": "#ffffff",
   "icons": [
     {

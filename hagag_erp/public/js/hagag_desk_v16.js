@@ -1,4 +1,4 @@
-/* === Hagag UIUX Desk JS v16 (The Sniper) === */
+/* === Elsaidy UIUX Desk JS v16 (The Sniper) === */
 (function() {
     function cleanMenu() {
         document.querySelectorAll('.dropdown-item, .dropdown-menu li, a, button').forEach(function(el) {
@@ -17,15 +17,22 @@
     else { document.addEventListener('DOMContentLoaded', function() { observer.observe(document.body, { childList: true, subtree: true }); }); }
 })();
 
-/* === Hagag Dynamic Branding === */
+/* === Elsaidy Dynamic Branding === */
 (function() {
     "use strict";
 
     var branding = [
-        ["Frappe Framework", "Hagag Admin"],
-        ["Frappe HR", "Hagag HR"],
-        ["ERPNext", "Hagag ERP"],
-        ["Frappe", "Hagag"]
+        ["Frappe Framework", "Elsaidy Admin"],
+        ["Frappe HR", "Elsaidy HR"],
+        ["ERPNext", "Elsaidy ERP"],
+        ["Frappe", "Elsaidy"],
+        ["Hagag Admin", "Elsaidy Admin"],
+        ["Hagag HR", "Elsaidy HR"],
+        ["Hagag ERP", "Elsaidy ERP"],
+        ["Hagagco", "Elsaidy"],
+        ["Hagag", "Elsaidy"],
+        ["مؤسسة حجاج", "شركة ركن سبل الأفق / Elsaidy"],
+        ["حجاج", "الصعيدي"]
     ];
 
     function replaceText(node) {

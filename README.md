@@ -223,10 +223,11 @@ docker compose -f compose.yaml -f compose.custom.yaml -f compose.origin.yaml -f 
 docker compose -f compose.yaml -f compose.custom.yaml -f compose.origin.yaml -f compose.raven.yaml exec -T backend bench build --app hagag_erp
 ```
 
-### 3. التطهير الشامل لقاعدة البيانات قبل الإنتاج (Database Sanitization)
-لحذف جميع الحركات المحاسبية والتجريبية وتصفير عدادات الترقيم (`00001`) مع الإبقاء التام على البيانات الأساسية والإعدادات:
+### 3. التطهير الآمن لقاعدة البيانات (Database Sanitization Safety Lock)
+تم تزويد دالة التطهير بقفل أمان برمجي صارم يمنع تنفيذها على موقع الإنتاج `erp.local`، ويلزم تمرير مفتاح التأكيد الصريح:
 ```bash
-docker compose -f compose.yaml -f compose.custom.yaml -f compose.origin.yaml -f compose.raven.yaml exec -T backend bench --site erp.local execute hagag_erp.setup.sanitize_database_test_data
+# محمية برمجياً ولا تعمل على موقع الإنتاج حفاظاً على البيانات
+bench execute hagag_erp.setup.sanitize_database_test_data --kwargs "{'confirm_token': 'CONFIRM_ERASE_TEST_DATA_ONLY'}"
 ```
 
 ### 4. مسح الكاش وإعادة تشغيل الخدمات
@@ -234,6 +235,37 @@ docker compose -f compose.yaml -f compose.custom.yaml -f compose.origin.yaml -f 
 docker compose -f compose.yaml -f compose.custom.yaml -f compose.origin.yaml -f compose.raven.yaml exec -T backend bench --site erp.local clear-cache
 docker compose -f compose.yaml -f compose.custom.yaml -f compose.origin.yaml -f compose.raven.yaml restart backend websocket queue-short queue-long frontend
 ```
+
+---
+
+## 🏛️ المحرك الضريبي السعودي المركزي وقفل منع التكرار (ZATCA Engine & Idempotency)
+
+### 1. المحرك الضريبي المركزي (`hagag_erp/tax_engine.py`)
+- **حسابات دقيقة بدقة `Decimal(0.01 SAR)`** باستخدام تقريب `ROUND_HALF_UP` لمنع أي فروقات كسرية.
+- **تطبيق صارم للمادة 50 من اللائحة التنفيذية لضريبة القيمة المضافة (ZATCA):**
+  - استبعاد استرداد ضريبة وقود وصيانة المركبات المقيدة (سيارات الركاب الخاصة) ورسملتها بالكامل على حساب المصروف.
+  - توجيه ضريبة وقود الآليات والمعدات غير المحددة بدقة أو غير المستوفية للفواتير الضريبية إلى حساب `1520 - ضريبة مدخلات معلقة تحت المراجعة والاعتماد - Rkn`.
+  - التحقق من وجود الحسابات التجميعية ومنع إدراج ضريبة المدخلات في الطرف الدائن في قيود المصروفات والمشتريات.
+  - خطاف أمان برمجي (`validate_tax_review_before_submit`) يمنع ترحيل أي مستند معلق ضريبياً إلى الأستاذ العام قبل تدقيقه واعتماده.
+- **معايير قطاع المقاولات للمستخلصات الإنشائية (IPC):**
+  - إثبات أن محجوز ضمان حسن التنفيذ (Retention) لا يخفض الوعاء الضريبي بأي حال.
+  - تطبيق قواعد نقطة استحقاق الضريبة الخاصة بالعقود الحكومية (منصة اعتماد) المرتبطة بأمر الدفع أو الاستلام.
+
+### 2. محرك القفل الذري ومنع التكرار (`hagag_erp/idempotency.py`)
+- جدول قفل مركزي في قاعدة البيانات (`tabElsaidy Operation Lock`) مدعوم بذاكرة Redis المؤقتة.
+- منع تكرار إنشاء المستندات المالية والقيود عند انقطاع الشبكة أو إعادة إرسال الرسائل من قبل المستخدم أو روبوتات المحادثة.
+- إعادة نفس المستند المعتمد في حالة تكرار نفس معرف العملية (`operation_id`)، وتوليد مستندات جديدة ومستقلة عند اختلاف النية.
+
+### 3. نتائج حزمة الاختبارات المعزولة المعتمدة (`tests_zatca_engine.py`)
+تم تنفيذ حزمة الاختبارات بالكامل داخل بيئة الاختبار المستقلة (`erp_test.local`) وحققت نسبة نجاح **100% (6 / 6)**:
+1. `Test 1`: توجيه بنزين محطة وقود غير محدد المركبة إلى حساب 1520 وحظر الترحيل نظامياً ✅
+2. `Test 2`: توجيه ديزل المعدات الثقيلة (بوكلين) بفاتورة ضريبية إلى حساب 1510 المسترد ✅
+3. `Test 3`: رسملة ضريبة سيارات الركاب الخاصة على المصروف واستبعادها من 1510 ✅
+4. `Test 4`: حساب المبالغ غير الشاملة (230 net + 34.50 vat = 264.50 gross) بدقة Decimal ✅
+5. `Test 5`: التحقق من منع التكرار الذري (Idempotency Key) والتفريق بين الطلبات المتطابقة والطلبات المستقلة ✅
+6. `Test 6`: حساب مستخلص المقاولات وإثبات أن محجوز الضمان لا يخفض الوعاء الضريبي وتطبيق اشتراطات منصة اعتماد ✅
+
+---
 
 ---
 

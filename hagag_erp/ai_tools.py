@@ -345,7 +345,18 @@ def create_draft_journal_entry(
     je.insert()
     frappe.db.commit()
 
-    view_url = f"/app/journal-entry/{je.name}"
+    full_url = frappe.utils.get_url(f"/app/journal-entry/{je.name}")
+    clean_message = (
+        f"تم إنشاء مسودة قيد اليومية بنجاح:\n"
+        f"📌 رقم القيد: {je.name}\n"
+        f"💰 المبلغ: {amt:,.2f} ريال سعودي\n"
+        f"🔹 الطرف المدين: {debit_account}\n"
+        f"🔸 الطرف الدائن: {credit_account}\n"
+        f"🏢 مركز التكلفة: {cost_center}\n\n"
+        f"رابط عرض المستند المباشر:\n"
+        f"{full_url}"
+    )
+
     return {
         "status": "success",
         "journal_entry": je.name,
@@ -356,8 +367,10 @@ def create_draft_journal_entry(
         "credit_account": credit_account,
         "cost_center": cost_center,
         "project": project,
-        "url": view_url,
-        "message": f"تم إنشاء مسودة قيد اليومية بنجاح برقم {je.name}"
+        "url": full_url,
+        "raw_url": full_url,
+        "html_link": f'<a href="{full_url}" target="_blank">{je.name}</a>',
+        "message": clean_message
     }
 
 

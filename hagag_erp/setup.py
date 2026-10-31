@@ -2380,3 +2380,22 @@ def sync_elsaidy_customizations():
 
     print("\n[Elsaidy ERP] All customizations synchronized successfully!\n")
     return True
+
+
+@frappe.whitelist()
+def cleanup_test_draft():
+    """Safely cleans up only the unapproved test draft ACC-JV-2026-00001 and resets the naming series counter."""
+    if frappe.db.exists("Journal Entry", "ACC-JV-2026-00001"):
+        doc = frappe.get_doc("Journal Entry", "ACC-JV-2026-00001")
+        if doc.docstatus == 0:
+            doc.delete(ignore_permissions=True)
+            print("Deleted test draft ACC-JV-2026-00001 successfully.")
+        else:
+            print(f"ACC-JV-2026-00001 has docstatus={doc.docstatus}, preserved.")
+    else:
+        print("ACC-JV-2026-00001 does not exist.")
+
+    frappe.db.sql("UPDATE tabSeries SET current = 0 WHERE name = 'ACC-JV-2026-'")
+    frappe.db.commit()
+    print("Series counter for ACC-JV-2026- reset to 0 successfully.")
+

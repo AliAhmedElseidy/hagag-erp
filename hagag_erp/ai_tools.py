@@ -176,16 +176,30 @@ def get_gl_balance(account=None, cost_center=None, project=None, from_date=None,
 
 def _resolve_leaf_account(acc_identifier, comp):
     """
-    Resolves an account identifier (name or account_name) to an active leaf account.
+    Resolves an account identifier (name, account_number, or account_name) to an active leaf account.
     If it's a group or not found, returns error information with suggestions.
     """
+    clean_id = str(acc_identifier or "").strip()
+    first_part = clean_id.split("-")[0].strip() if "-" in clean_id else clean_id
+
+    # 0. Direct match on account_number if string begins with digits (e.g. 1110)
+    acc = None
+    if first_part.isdigit():
+        acc = frappe.db.get_value(
+            "Account",
+            {"account_number": first_part, "company": comp},
+            ["name", "account_name", "is_group", "disabled", "parent_account", "account_type"],
+            as_dict=True
+        )
+
     # 1. Direct match on name
-    acc = frappe.db.get_value(
-        "Account",
-        {"name": acc_identifier, "company": comp},
-        ["name", "account_name", "is_group", "disabled", "parent_account", "account_type"],
-        as_dict=True
-    )
+    if not acc:
+        acc = frappe.db.get_value(
+            "Account",
+            {"name": acc_identifier, "company": comp},
+            ["name", "account_name", "is_group", "disabled", "parent_account", "account_type"],
+            as_dict=True
+        )
 
     # 2. Match on account_name if not found
     if not acc:
@@ -196,11 +210,26 @@ def _resolve_leaf_account(acc_identifier, comp):
             as_dict=True
         )
 
+    # 2.5 Match by name prefix if account_number exists (e.g. "1110 - ")
+    if not acc and first_part.isdigit():
+        acc_name = frappe.db.get_value(
+            "Account",
+            {"name": ["like", f"{first_part} - %"], "company": comp, "is_group": 0},
+            "name"
+        )
+        if acc_name:
+            acc = frappe.db.get_value(
+                "Account",
+                acc_name,
+                ["name", "account_name", "is_group", "disabled", "parent_account", "account_type"],
+                as_dict=True
+            )
+
     # 3. Fuzzy search if still not found
     if not acc:
         suggestions = frappe.get_all(
             "Account",
-            filters={"company": comp, "is_group": 0, "disabled": 0, "account_name": ["like", f"%{acc_identifier}%"]},
+            filters={"company": comp, "is_group": 0, "disabled": 0, "account_name": ["like", f"%{clean_id}%"]},
             fields=["name", "account_name", "parent_account"],
             limit=5
         )

@@ -70,7 +70,7 @@ def run_all_tests():
         res1 = create_draft_journal_entry(
             company=comp,
             debit_account="5120 - مصروف الوقود والمحروقات - Rkn",
-            credit_account="1110 - النقدية في الصندوق - Rkn",
+            credit_account="1110 - نقد - Rkn",
             amount=230.00,
             amount_basis="inclusive",
             user_remark="فاتورة بنزين محطة وقود بدون تحديد المركبة",
@@ -109,7 +109,7 @@ def run_all_tests():
         res2 = create_draft_journal_entry(
             company=comp,
             debit_account="5120 - مصروف الوقود والمحروقات - Rkn",
-            credit_account="1110 - النقدية في الصندوق - Rkn",
+            credit_account="1110 - نقد - Rkn",
             amount=230.00,
             amount_basis="inclusive",
             usage_type="commercial_equipment",
@@ -138,7 +138,7 @@ def run_all_tests():
         res3 = create_draft_journal_entry(
             company=comp,
             debit_account="5120 - مصروف الوقود والمحروقات - Rkn",
-            credit_account="1110 - النقدية في الصندوق - Rkn",
+            credit_account="1110 - نقد - Rkn",
             amount=230.00,
             amount_basis="inclusive",
             usage_type="restricted_vehicle",
@@ -189,7 +189,7 @@ def run_all_tests():
         first_call = create_draft_journal_entry(
             company=comp,
             debit_account="5150 - مواد ومهمات تشغيل المشاريع - Rkn",
-            credit_account="1110 - النقدية في الصندوق - Rkn",
+            credit_account="1110 - نقد - Rkn",
             amount=500.00,
             amount_basis="inclusive",
             user_remark="شراء أسمنت ومواد أولية",
@@ -201,7 +201,7 @@ def run_all_tests():
         retry_call = create_draft_journal_entry(
             company=comp,
             debit_account="5150 - مواد ومهمات تشغيل المشاريع - Rkn",
-            credit_account="1110 - النقدية في الصندوق - Rkn",
+            credit_account="1110 - نقد - Rkn",
             amount=500.00,
             amount_basis="inclusive",
             user_remark="شراء أسمنت ومواد أولية",
@@ -216,7 +216,7 @@ def run_all_tests():
         distinct_call = create_draft_journal_entry(
             company=comp,
             debit_account="5150 - مواد ومهمات تشغيل المشاريع - Rkn",
-            credit_account="1110 - النقدية في الصندوق - Rkn",
+            credit_account="1110 - نقد - Rkn",
             amount=500.00,
             amount_basis="inclusive",
             user_remark="شراء أسمنت ومواد أولية (طلب مستقل جديد)",
@@ -296,7 +296,7 @@ def _ensure_test_accounts(comp):
         {"account_name": "ضريبة مدخلات غير قابلة للاسترداد", "account_number": "5235", "parent_account": f"5200 - المصاريف العمومية والإدارية - {comp}", "account_type": "Expense", "root_type": "Expense"},
         {"account_name": "مصروف الوقود والمحروقات", "account_number": "5120", "parent_account": f"5100 - تكاليف العمليات والمشاريع المباشرة - {comp}", "account_type": "Expense", "root_type": "Expense"},
         {"account_name": "مواد ومهمات تشغيل المشاريع", "account_number": "5150", "parent_account": f"5100 - تكاليف العمليات والمشاريع المباشرة - {comp}", "account_type": "Expense", "root_type": "Expense"},
-        {"account_name": "النقدية في الصندوق", "account_number": "1110", "parent_account": f"1100 - الأصول المتداولة - {comp}", "account_type": "Cash", "root_type": "Asset"},
+        {"account_name": "نقد", "account_number": "1110", "parent_account": f"1100 - الأصول المتداولة - {comp}", "account_type": "Cash", "root_type": "Asset"},
         {"account_name": "عهد نقدية للمهندسين والمشرفين", "account_number": "1120", "parent_account": f"1100 - الأصول المتداولة - {comp}", "account_type": "Cash", "root_type": "Asset"}
     ]
 

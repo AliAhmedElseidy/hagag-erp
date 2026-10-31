@@ -352,12 +352,15 @@ def validate_tax_review_before_submit(doc, method=None):
 
 
 def calculate_ipc_tax_breakdown(
-    contract_type,
-    work_completed_amount,
+    work_completed_amount=None,
+    contract_type="عقد تجاري خاص",
     retention_pct=Decimal("10.00"),
+    retention_rate_pct=None,
     advance_recovery_amount=Decimal("0.00"),
+    advance_deduction_amount=None,
     advance_recovery_tax_already_paid=True,
-    vat_rate_pct=Decimal("15.00")
+    vat_rate_pct=Decimal("15.00"),
+    **kwargs
 ) -> dict:
     """
     Calculates Saudi Contracting Interim Payment Certificate (IPC) breakdown
@@ -365,9 +368,8 @@ def calculate_ipc_tax_breakdown(
 
     Rules:
     1. Private vs Government Contract:
-       - 'عقد قطاع خاص': Tax point is the date of supply / certification / payment (whichever earlier).
-       - 'عقد حكومي - منصة اعتماد': Special time-of-supply rule: Tax point is linked to the issuance
-         of Payment Order (أمر الدفع) by the government entity or payment receipt (whichever earlier).
+       - 'عقد قطاع خاص' / 'عقد تجاري خاص': Tax point is the certification/supply/invoice date.
+       - 'عقد حكومي منصة اعتماد': Special time-of-supply rule: Tax point is payment / approval date.
     2. Retention Rule:
        - Retention (محجوز ضمان حسن التنفيذ) does NOT reduce the VAT taxable base!
          Taxable base is calculated on the full certified work value.
@@ -375,15 +377,26 @@ def calculate_ipc_tax_breakdown(
        - Advance recovery reduces the taxable base only if VAT was already accounted for
          on the original advance payment invoice.
     """
+    # Handle swapped positional arguments if called as (contract_type, work_completed_amount)
+    if isinstance(work_completed_amount, str) and not any(c.isdigit() for c in work_completed_amount):
+        temp_ct = work_completed_amount
+        work_completed_amount = contract_type
+        contract_type = temp_ct
+
+    if kwargs.get("contract_type"):
+        contract_type = kwargs.get("contract_type")
+    if kwargs.get("work_completed_amount") is not None:
+        work_completed_amount = kwargs.get("work_completed_amount")
+
+    ret_pct = to_decimal(retention_rate_pct if retention_rate_pct is not None else retention_pct)
+    adv_rec = to_decimal(advance_deduction_amount if advance_deduction_amount is not None else advance_recovery_amount)
     work_val = to_decimal(work_completed_amount)
-    ret_pct = to_decimal(retention_pct)
-    adv_rec = to_decimal(advance_recovery_amount)
     rate_factor = to_decimal(vat_rate_pct) / Decimal("100.00")
 
     # Retention calculation: calculated on total work certified
     retention_amount = (work_val * (ret_pct / Decimal("100.00"))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    # Taxable Base determination
+    # Taxable Base determination: retention does NOT reduce taxable base
     if advance_recovery_tax_already_paid:
         taxable_base = (work_val - adv_rec).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     else:
@@ -401,22 +414,29 @@ def calculate_ipc_tax_breakdown(
     # Net Cash Payable to Contractor (Gross IPC value minus retention withheld)
     net_payable = (gross_ipc_value - retention_amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    # Time of supply note
-    if "حكومي" in (contract_type or "") or "اعتماد" in (contract_type or "").lower():
-        time_of_supply_rule = "عقد حكومي (منصة اعتماد): تاريخ استحقاق الضريبة مرتبط بصدور أمر الدفع من الجهة الحكومية أو استلام الدفعة أيهما أسبق (وفق أحكام اللائحة التنفيذية لضريبة القيمة المضافة الخاصة بالعقود الحكومية)."
+    # Time of supply classification
+    is_gov = ("حكومي" in (contract_type or "") or "اعتماد" in (contract_type or "").lower())
+    tos_code = "payment_date" if is_gov else "certification_date"
+
+    if is_gov:
+        time_of_supply_desc = "عقد حكومي (منصة اعتماد): تاريخ استحقاق الضريبة مرتبط بصدور أمر الدفع من الجهة الحكومية أو استلام الدفعة أيهما أسبق."
     else:
-        time_of_supply_rule = "عقد قطاع خاص: تاريخ استحقاق الضريبة هو تاريخ إصدار المستخلص أو تاريخ التوريد الجزئي أو استلام الدفعة أيهما أسبق."
+        time_of_supply_desc = "عقد قطاع خاص: تاريخ استحقاق الضريبة هو تاريخ إصدار المستخلص أو تاريخ التوريد الجزئي أو استلام الدفعة أيهما أسبق."
 
     return {
         "contract_type": contract_type,
         "work_completed_amount": work_val,
         "retention_pct": ret_pct,
+        "retention_rate_pct": ret_pct,
         "retention_amount": retention_amount,
         "advance_recovery_amount": adv_rec,
         "taxable_base": taxable_base,
+        "tax_base": taxable_base,
         "vat_rate_pct": vat_rate_pct,
         "vat_amount": vat_amount,
         "gross_ipc_value": gross_ipc_value,
+        "net_payable": net_payable,
         "net_payable_to_contractor": net_payable,
-        "time_of_supply_rule": time_of_supply_rule
+        "time_of_supply_rule": tos_code,
+        "time_of_supply_description": time_of_supply_desc
     }

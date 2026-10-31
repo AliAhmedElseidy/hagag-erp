@@ -13,6 +13,9 @@ from decimal import Decimal, ROUND_HALF_UP
 import frappe
 from frappe import _
 
+VAT_RATE = Decimal("15.00")
+
+
 
 def to_decimal(val, precision="0.01") -> Decimal:
     """Safely converts float/int/str/Decimal to quantized Decimal."""

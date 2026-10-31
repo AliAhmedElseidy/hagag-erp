@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Elsaidy ERP - Central Saudi ZATCA Tax & Contracting Engine
 ===========================================================
@@ -116,6 +116,35 @@ def get_company_tax_accounts(company=None) -> dict:
         "pending_vat": accounts["pending_vat"],
         "output_vat": accounts["output_vat"],
         "non_recoverable_vat": accounts["non_recoverable_vat"]
+    }
+
+
+def calculate_zatca_tax(
+    amount,
+    is_inclusive=True,
+    vat_rate_pct=Decimal("15.00"),
+    has_valid_tax_invoice=True,
+    usage_type="commercial"
+) -> dict:
+    """
+    Convenience calculation wrapper for ZATCA 15% VAT breakdown.
+    Returns: { 'net_amount': Decimal, 'tax_amount': Decimal, 'total_amount': Decimal, 'is_recoverable': bool }
+    """
+    basis = "inclusive" if is_inclusive else "exclusive"
+    res = evaluate_vat_eligibility_and_split(
+        amount=amount,
+        is_taxable=True,
+        amount_basis=basis,
+        has_valid_tax_invoice=has_valid_tax_invoice,
+        usage_type=usage_type,
+        vat_rate_pct=vat_rate_pct
+    )
+    return {
+        "net_amount": res["base_amount"],
+        "tax_amount": res["vat_amount"],
+        "total_amount": res["gross_amount"],
+        "is_recoverable": res.get("is_recoverable", True),
+        "target_vat_account": res.get("target_vat_account")
     }
 
 
@@ -315,6 +344,51 @@ def validate_balanced_entry(accounts_lines, company=None) -> Decimal:
         )
 
     return total_debit
+
+
+def create_draft_journal_entry(
+    company=None,
+    accounts_data=None,
+    user_remark=None,
+    reference_id=None,
+    posting_date=None,
+    voucher_type="Journal Entry"
+):
+    """
+    Creates a balanced Draft Journal Entry (docstatus = 0) with idempotency protection.
+    """
+    comp, curr = get_target_company(company)
+    if not accounts_data or not isinstance(accounts_data, list):
+        raise ValueError("accounts_data must be a non-empty list of dicts")
+
+    # Validate balanced
+    validate_balanced_entry(accounts_data, comp)
+
+    # Check idempotency if reference_id provided
+    if reference_id:
+        existing = frappe.db.get_value("Journal Entry", {"user_remark": ["like", f"%{reference_id}%"], "docstatus": ["in", [0, 1]]}, "name")
+        if existing:
+            return frappe.get_doc("Journal Entry", existing)
+
+    jv = frappe.new_doc("Journal Entry")
+    jv.voucher_type = voucher_type
+    jv.company = comp
+    jv.posting_date = posting_date or frappe.utils.today()
+    jv.user_remark = f"[{reference_id}] {user_remark}" if reference_id else (user_remark or "")
+
+    for row in accounts_data:
+        jv.append("accounts", {
+            "account": row.get("account"),
+            "debit_in_account_currency": frappe.utils.flt(row.get("debit", 0.0)),
+            "credit_in_account_currency": frappe.utils.flt(row.get("credit", 0.0)),
+            "cost_center": row.get("cost_center"),
+            "project": row.get("project"),
+            "user_remark": row.get("user_remark")
+        })
+
+    jv.flags.ignore_permissions = True
+    jv.insert()
+    return jv
 
 
 def validate_tax_review_before_submit(doc, method=None):

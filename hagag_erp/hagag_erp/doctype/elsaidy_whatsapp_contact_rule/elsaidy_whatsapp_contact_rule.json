@@ -1,0 +1,116 @@
+{
+ "actions": [],
+ "creation": "2026-10-31 23:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "contact_name",
+  "phone_number",
+  "is_active",
+  "role",
+  "linked_employee",
+  "default_project",
+  "default_cost_center",
+  "default_custody_account",
+  "column_break_perms",
+  "can_record_expenses",
+  "can_request_balance",
+  "can_create_purchase_invoice",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "contact_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "اسم جهة الاتصال / الشخص",
+   "reqd": 1
+  },
+  {
+   "fieldname": "phone_number",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "رقم الواتساب (دولي/محلي)",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "مفعل"
+  },
+  {
+   "fieldname": "role",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "الدور / الصفة",
+   "options": "\nمهندس مشروع\nمشرف موقع\nمحاسب موقع\nإدارة عليا\nمورد\nعميل"
+  },
+  {
+   "fieldname": "linked_employee",
+   "fieldtype": "Link",
+   "label": "الموظف المرتبط",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "default_project",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "المشروع الافتراضي",
+   "options": "Project"
+  },
+  {
+   "fieldname": "default_cost_center",
+   "fieldtype": "Link",
+   "label": "مركز التكلفة الافتراضي",
+   "options": "Cost Center"
+  },
+  {
+   "fieldname": "default_custody_account",
+   "fieldtype": "Link",
+   "label": "حساب العهدة الافتراضي",
+   "options": "Account"
+  },
+  {
+   "fieldname": "column_break_perms",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "can_record_expenses",
+   "fieldtype": "Check",
+   "label": "تسجيل المصروفات والعهد"
+  },
+  {
+   "default": "1",
+   "fieldname": "can_request_balance",
+   "fieldtype": "Check",
+   "label": "الاستعلام عن الأرصدة والمستحقات"
+  },
+  {
+   "default": "0",
+   "fieldname": "can_create_purchase_invoice",
+   "fieldtype": "Check",
+   "label": "تسجيل فواتير مشتريات"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "ملاحظات"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-31 23:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Hagag ERP",
+ "name": "Elsaidy WhatsApp Contact Rule",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

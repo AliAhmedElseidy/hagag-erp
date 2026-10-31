@@ -1,0 +1,101 @@
+{
+ "actions": [],
+ "creation": "2026-10-31 23:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "group_name",
+  "group_jid",
+  "is_active",
+  "default_project",
+  "default_cost_center",
+  "default_custody_account",
+  "column_break_grp",
+  "require_mention",
+  "auto_reply_in_group",
+  "participants_count",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "group_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "اسم المجموعة",
+   "reqd": 1
+  },
+  {
+   "fieldname": "group_jid",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "معرف المجموعة (JID)",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "مفعل"
+  },
+  {
+   "fieldname": "default_project",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "المشروع الافتراضي",
+   "options": "Project"
+  },
+  {
+   "fieldname": "default_cost_center",
+   "fieldtype": "Link",
+   "label": "مركز التكلفة الافتراضي",
+   "options": "Cost Center"
+  },
+  {
+   "fieldname": "default_custody_account",
+   "fieldtype": "Link",
+   "label": "حساب العهدة الافتراضي",
+   "options": "Account"
+  },
+  {
+   "fieldname": "column_break_grp",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "require_mention",
+   "fieldtype": "Check",
+   "label": "طلب إشارة للبوت (@)"
+  },
+  {
+   "default": "1",
+   "fieldname": "auto_reply_in_group",
+   "fieldtype": "Check",
+   "label": "الرد التلقائي داخل المجموعة"
+  },
+  {
+   "fieldname": "participants_count",
+   "fieldtype": "Int",
+   "label": "عدد الأعضاء",
+   "read_only": 1
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "ملاحظات"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-31 23:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Hagag ERP",
+ "name": "Elsaidy WhatsApp Group Rule",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

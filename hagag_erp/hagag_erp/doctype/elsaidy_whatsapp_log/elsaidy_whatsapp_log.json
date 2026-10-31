@@ -1,0 +1,172 @@
+{
+ "actions": [],
+ "autoname": "naming_series:",
+ "creation": "2026-10-31 23:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "message_id",
+  "direction",
+  "sender_phone",
+  "sender_name",
+  "is_group",
+  "group_jid",
+  "group_name",
+  "column_break_log",
+  "status",
+  "extracted_intent",
+  "linked_document_type",
+  "linked_document_name",
+  "execution_time_ms",
+  "sec_content",
+  "message_text",
+  "reply_text",
+  "error_message"
+ ],
+ "fields": [
+  {
+   "default": "WA-LOG-.YYYY.-.#####",
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "السلسلة",
+   "no_copy": 1,
+   "options": "WA-LOG-.YYYY.-.#####",
+   "set_only_once": 1
+  },
+  {
+   "fieldname": "message_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "معرف الرسالة (Message ID)",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "Incoming",
+   "fieldname": "direction",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "الاتجاه",
+   "options": "Incoming\nOutgoing"
+  },
+  {
+   "fieldname": "sender_phone",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "رقم المرسل"
+  },
+  {
+   "fieldname": "sender_name",
+   "fieldtype": "Data",
+   "label": "اسم المرسل"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_group",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "رسالة من مجموعة"
+  },
+  {
+   "fieldname": "group_jid",
+   "fieldtype": "Data",
+   "label": "معرف المجموعة"
+  },
+  {
+   "fieldname": "group_name",
+   "fieldtype": "Data",
+   "label": "اسم المجموعة"
+  },
+  {
+   "fieldname": "column_break_log",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Received",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "الحالة",
+   "options": "Received\nProcessed\nReplied\nIgnored\nFailed"
+  },
+  {
+   "fieldname": "extracted_intent",
+   "fieldtype": "Data",
+   "label": "القصد المستخرج"
+  },
+  {
+   "fieldname": "linked_document_type",
+   "fieldtype": "Link",
+   "label": "نوع المستند المرتبط",
+   "options": "DocType"
+  },
+  {
+   "fieldname": "linked_document_name",
+   "fieldtype": "Dynamic Link",
+   "label": "رقم المستند المرتبط",
+   "options": "linked_document_type"
+  },
+  {
+   "fieldname": "execution_time_ms",
+   "fieldtype": "Float",
+   "label": "وقت المعالجة (مللي ثانية)"
+  },
+  {
+   "fieldname": "sec_content",
+   "fieldtype": "Section Break",
+   "label": "نص الرسالة والرد"
+  },
+  {
+   "fieldname": "message_text",
+   "fieldtype": "Long Text",
+   "label": "نص الرسالة الأصلية"
+  },
+  {
+   "fieldname": "reply_text",
+   "fieldtype": "Long Text",
+   "label": "نص الرد المرسل"
+  },
+  {
+   "fieldname": "error_message",
+   "fieldtype": "Long Text",
+   "label": "رسالة الخطأ"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-31 23:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Hagag ERP",
+ "name": "Elsaidy WhatsApp Log",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -1,0 +1,267 @@
+{
+ "actions": [],
+ "creation": "2026-10-31 23:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "tab_connection",
+  "status_html",
+  "sec_creds",
+  "bot_phone_number",
+  "connection_status",
+  "connected_phone",
+  "column_break_conn",
+  "baileys_url",
+  "api_token",
+  "last_sync_time",
+  "sec_defaults",
+  "default_company",
+  "default_cost_center",
+  "column_break_hub_def",
+  "auto_reply_enabled",
+  "tab_direct_rules",
+  "sec_direct_header",
+  "allow_unregistered_direct",
+  "unregistered_auto_reply",
+  "sec_direct_table",
+  "allowed_direct_contacts",
+  "tab_group_rules",
+  "sec_grp_header",
+  "allow_unregistered_groups",
+  "sec_grp_table",
+  "allowed_groups",
+  "tab_ai_zatca",
+  "sec_zatca",
+  "enable_zatca_tax_engine",
+  "default_expense_account",
+  "default_vat_account",
+  "column_break_ai",
+  "raven_accounting_agent",
+  "system_prompt_override"
+ ],
+ "fields": [
+  {
+   "fieldname": "tab_connection",
+   "fieldtype": "Tab Break",
+   "label": "الربط وحالة البوت"
+  },
+  {
+   "fieldname": "status_html",
+   "fieldtype": "HTML",
+   "label": "لوحة مؤشر الحالة"
+  },
+  {
+   "fieldname": "sec_creds",
+   "fieldtype": "Section Break",
+   "label": "بيانات الاتصال وخادم Baileys"
+  },
+  {
+   "description": "أدخل رقم الهاتف لطلب كود الربط المكون من 8 خانات (مثال: 01028632620 أو 0569589664)",
+   "fieldname": "bot_phone_number",
+   "fieldtype": "Data",
+   "label": "رقم هاتف البوت"
+  },
+  {
+   "default": "Disconnected",
+   "fieldname": "connection_status",
+   "fieldtype": "Select",
+   "label": "حالة الاتصال",
+   "options": "Disconnected\nConnecting\nConnected\nError",
+   "read_only": 1
+  },
+  {
+   "fieldname": "connected_phone",
+   "fieldtype": "Data",
+   "label": "الرقم المتصل حالياً",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_conn",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "http://wa-baileys:3000",
+   "fieldname": "baileys_url",
+   "fieldtype": "Data",
+   "label": "رابط خادم Baileys",
+   "reqd": 1
+  },
+  {
+   "default": "HAGAG_WA_7f3c9a2d6e4b8a1c",
+   "fieldname": "api_token",
+   "fieldtype": "Password",
+   "label": "رمز أمان API (Token)",
+   "reqd": 1
+  },
+  {
+   "fieldname": "last_sync_time",
+   "fieldtype": "Datetime",
+   "label": "آخر فحص للاتصال",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_defaults",
+   "fieldtype": "Section Break",
+   "label": "الإعدادات الافتراضية للعمليات"
+  },
+  {
+   "default": "شركة ركن سبل الأفق للمقاولات",
+   "fieldname": "default_company",
+   "fieldtype": "Link",
+   "label": "الشركة الافتراضية",
+   "options": "Company"
+  },
+  {
+   "fieldname": "default_cost_center",
+   "fieldtype": "Link",
+   "label": "مركز التكلفة الافتراضي",
+   "options": "Cost Center"
+  },
+  {
+   "fieldname": "column_break_hub_def",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "auto_reply_enabled",
+   "fieldtype": "Check",
+   "label": "تفعيل الردود التلقائية والذكية"
+  },
+  {
+   "fieldname": "tab_direct_rules",
+   "fieldtype": "Tab Break",
+   "label": "المحادثات المباشرة (1-to-1)"
+  },
+  {
+   "fieldname": "sec_direct_header",
+   "fieldtype": "Section Break",
+   "label": "سياسة المحادثات الفردية"
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_unregistered_direct",
+   "fieldtype": "Check",
+   "label": "السماح بالرد على الأرقام غير المسجلة"
+  },
+  {
+   "default": "عذراً، هذا الرقم غير مصرح له بتنفيذ عمليات على نظام Elsaidy ERP. يرجى التواصل مع إدارة النظام.",
+   "fieldname": "unregistered_auto_reply",
+   "fieldtype": "Small Text",
+   "label": "رسالة الرد التلقائي للأرقام غير المصرح لها"
+  },
+  {
+   "fieldname": "sec_direct_table",
+   "fieldtype": "Section Break",
+   "label": "جهات الاتصال المصرح لها (المهندسين والمشرفين)"
+  },
+  {
+   "fieldname": "allowed_direct_contacts",
+   "fieldtype": "Table",
+   "label": "قائمة جهات الاتصال المعتمدة",
+   "options": "Elsaidy WhatsApp Contact Rule"
+  },
+  {
+   "fieldname": "tab_group_rules",
+   "fieldtype": "Tab Break",
+   "label": "مجموعات المشاريع (Groups)"
+  },
+  {
+   "fieldname": "sec_grp_header",
+   "fieldtype": "Section Break",
+   "label": "سياسة مجموعات المشاريع"
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_unregistered_groups",
+   "fieldtype": "Check",
+   "label": "السماح بالتفاعل في أي مجموعة مضاف إليها البوت"
+  },
+  {
+   "fieldname": "sec_grp_table",
+   "fieldtype": "Section Break",
+   "label": "مجموعات واتساب المعتمدة"
+  },
+  {
+   "fieldname": "allowed_groups",
+   "fieldtype": "Table",
+   "label": "مجموعات المشاريع المعتمدة",
+   "options": "Elsaidy WhatsApp Group Rule"
+  },
+  {
+   "fieldname": "tab_ai_zatca",
+   "fieldtype": "Tab Break",
+   "label": "المحرك المالي و Raven AI"
+  },
+  {
+   "fieldname": "sec_zatca",
+   "fieldtype": "Section Break",
+   "label": "تكامل المحرك الضريبي ZATCA 15%"
+  },
+  {
+   "default": "1",
+   "fieldname": "enable_zatca_tax_engine",
+   "fieldtype": "Check",
+   "label": "تطبيق قواعد الضريبة السعودية ZATCA 15% تلقائياً"
+  },
+  {
+   "fieldname": "default_expense_account",
+   "fieldtype": "Link",
+   "label": "حساب المصروفات الافتراضي",
+   "options": "Account"
+  },
+  {
+   "fieldname": "default_vat_account",
+   "fieldtype": "Link",
+   "label": "حساب ضريبة المدخلات (15%)",
+   "options": "Account"
+  },
+  {
+   "fieldname": "column_break_ai",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Accounting",
+   "fieldname": "raven_accounting_agent",
+   "fieldtype": "Data",
+   "label": "وكيل Raven AI المحاسبي"
+  },
+  {
+   "fieldname": "system_prompt_override",
+   "fieldtype": "Code",
+   "label": "توجيهات النظام الإضافية"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-10-31 23:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Hagag ERP",
+ "name": "Elsaidy WhatsApp Hub",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

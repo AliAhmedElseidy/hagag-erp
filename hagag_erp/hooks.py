@@ -141,7 +141,14 @@ app_license = "mit"
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
+doc_events = {
+	"Journal Entry": {
+		"before_submit": "hagag_erp.tax_engine.validate_tax_review_before_submit"
+	},
+	"Purchase Invoice": {
+		"before_submit": "hagag_erp.tax_engine.validate_tax_review_before_submit"
+	}
+}
 # 	"*": {
 # 		"on_update": "method",
 # 		"on_cancel": "method",

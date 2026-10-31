@@ -137,9 +137,99 @@ CUSTOM_FUNCTIONS = [
                 "company": {
                     "type": "string",
                     "description": "اسم الشركة (اختياري)"
+                },
+                "amount_basis": {
+                    "type": "string",
+                    "description": "نوع المبلغ: inclusive (شامل الضريبة 15%) أو exclusive (غير شامل، تضاف الضريبة)"
+                },
+                "usage_type": {
+                    "type": "string",
+                    "description": "نوع الاستخدام: commercial_equipment (معدات موقع وآليات)، restricted_vehicle (سيارة خاصة مقيدة)، general_expense (مصروف عام)"
+                },
+                "has_valid_tax_invoice": {
+                    "type": "boolean",
+                    "description": "هل تتوفر فاتورة ضريبية نظامية مستوفية لاشتراطات هيئة الزكاة والضريبة والجمارك"
+                },
+                "tax_treatment_policy": {
+                    "type": "string",
+                    "description": "معالجة الضريبة غير المستردة: capitalize_to_expense (إضافتها للمصروف) أو expense_account (حساب 5235)"
+                },
+                "operation_id": {
+                    "type": "string",
+                    "description": "معرف العملية الموحد لمنع التكرار (Idempotency Key)"
                 }
             },
             "required": ["debit_account", "credit_account", "amount"]
+        }
+    },
+    {
+        "name": "create_contractor_purchase_invoice",
+        "function_name": "create_contractor_purchase_invoice",
+        "description": "ينشئ فاتورة مشتريات أو مقاولي باطن كمسودة (docstatus=0) في النظام مرتبطة بقالب ضريبة المشتريات 15% لتظهر في سجل المشتريات وإقرار ZATCA، مع تأمين كامل ضد التكرار (Idempotency).",
+        "type": "Custom Function",
+        "function_path": "hagag_erp.ai_tools.create_contractor_purchase_invoice",
+        "reference_doctype": "Purchase Invoice",
+        "params": {
+            "type": "object",
+            "properties": {
+                "supplier": {
+                    "type": "string",
+                    "description": "اسم المورد أو مقاول الباطن بالضبط"
+                },
+                "amount": {
+                    "type": "number",
+                    "description": "قيمة الفاتورة المالية (بالريال السعودي)"
+                },
+                "bill_no": {
+                    "type": "string",
+                    "description": "رقم فاتورة المورد الضريبية"
+                },
+                "bill_date": {
+                    "type": "string",
+                    "description": "تاريخ فاتورة المورد YYYY-MM-DD"
+                },
+                "posting_date": {
+                    "type": "string",
+                    "description": "تاريخ القيد والتسجيل المحاسبي YYYY-MM-DD"
+                },
+                "expense_account": {
+                    "type": "string",
+                    "description": "حساب المصروف أو تكلفة المشروع (مثل 5150 مواد أو 5160 مقاولي باطن)"
+                },
+                "item_name": {
+                    "type": "string",
+                    "description": "بيان أو وصف البند / الخدمة / التوريد"
+                },
+                "cost_center": {
+                    "type": "string",
+                    "description": "مركز التكلفة"
+                },
+                "project": {
+                    "type": "string",
+                    "description": "اسم المشروع المرتبط"
+                },
+                "amount_basis": {
+                    "type": "string",
+                    "description": "نوع المبلغ: inclusive (شامل الضريبة 15%) أو exclusive (غير شامل)"
+                },
+                "has_valid_tax_invoice": {
+                    "type": "boolean",
+                    "description": "هل تتوفر فاتورة ضريبية نظامية مستوفية لاشتراطات هيئة الزكاة"
+                },
+                "contract_type": {
+                    "type": "string",
+                    "description": "نوع العقد: عقد تجاري خاص أو عقد حكومي منصة اعتماد"
+                },
+                "operation_id": {
+                    "type": "string",
+                    "description": "معرف العملية الموحد لمنع التكرار (Idempotency Key)"
+                },
+                "company": {
+                    "type": "string",
+                    "description": "اسم الشركة (اختياري)"
+                }
+            },
+            "required": ["supplier", "amount"]
         }
     },
     {
@@ -311,6 +401,7 @@ https://erp.elsaidy.org/app/journal-entry/ACC-JV-2026-00001
             "get_projects_list",
             "get_gl_balance",
             "create_draft_journal_entry",
+            "create_contractor_purchase_invoice",
             "create_custody_settlement_entry",
             "get_project_financial_summary",
             "get_journal_entry_list",
@@ -592,6 +683,8 @@ def sync_saudi_accounting_preset():
         {"account_name": "رسوم حكومية وتراخيص بلدية", "account_number": "5230", "parent_account": f"5200 - نفقات غير مباشرة - {abbr}", "root_type": "Expense", "account_type": "Expense Account"},
         {"account_name": "ضريبة القيمة المضافة للمخرجات 15%", "account_number": "2330", "parent_account": f"2300 - الرسوم والضرائب - {abbr}", "root_type": "Liability", "account_type": "Tax", "tax_rate": 15.0},
         {"account_name": "ضريبة القيمة المضافة للمدخلات 15%", "account_number": "1510", "parent_account": f"1500 - ضريبية الأصول - {abbr}", "root_type": "Asset", "account_type": "Tax", "tax_rate": 15.0},
+        {"account_name": "ضريبة مدخلات معلقة تحت المراجعة والاعتماد", "account_number": "1520", "parent_account": f"1500 - ضريبية الأصول - {abbr}", "root_type": "Asset", "account_type": "Tax", "tax_rate": 15.0},
+        {"account_name": "ضريبة مدخلات غير قابلة للاسترداد", "account_number": "5235", "parent_account": f"5200 - نفقات غير مباشرة - {abbr}", "root_type": "Expense", "account_type": "Expense Account"},
         {"account_name": "محجوزات ضمان حسن التنفيذ للعملاء (Retention)", "account_number": "1320", "parent_account": f"1300 - الحسابات المدينة - {abbr}", "root_type": "Asset", "account_type": "Receivable"},
         {"account_name": "محجوزات ضمان مقاولي الباطن", "account_number": "2130", "parent_account": f"2100 - الحسابات الدائنة - {abbr}", "root_type": "Liability", "account_type": "Payable"},
         {"account_name": "عهد نقدية للمهندسين والمشرفين", "account_number": "1120", "parent_account": f"1100 - النقدية الحاضرة - {abbr}", "root_type": "Asset", "account_type": "Cash"}
@@ -1437,6 +1530,63 @@ def sync_saudi_custom_fields():
             except Exception:
                 pass
 
+    # ZATCA Tax & Idempotency Custom Fields for Journal Entry
+    zatca_je_fields = [
+        {"fieldname": "custom_zatca_section", "label": "بيانات الفحص الضريبي وهيئة الزكاة (ZATCA)", "fieldtype": "Section Break", "insert_after": "user_remark"},
+        {"fieldname": "custom_tax_review_status", "label": "حالة التدقيق الضريبي", "fieldtype": "Select", "options": "\nمكتمل ومطابق\nقيد المراجعة الضريبية\nمستبعد من الاسترداد الضريبي\nغير خاضع للضريبة", "default": "مكتمل ومطابق", "insert_after": "custom_zatca_section"},
+        {"fieldname": "custom_has_valid_tax_invoice", "label": "توفر فاتورة ضريبية نظامية", "fieldtype": "Check", "default": "1", "insert_after": "custom_tax_review_status"},
+        {"fieldname": "custom_contract_type", "label": "نوع العقد التجاري", "fieldtype": "Select", "options": "\nعقد تجاري خاص\nعقد حكومي منصة اعتماد", "default": "عقد تجاري خاص", "insert_after": "custom_has_valid_tax_invoice"},
+        {"fieldname": "custom_col_zatca", "label": None, "fieldtype": "Column Break", "insert_after": "custom_contract_type"},
+        {"fieldname": "custom_operation_id", "label": "معرف العملية الموحد (Idempotency Key)", "fieldtype": "Data", "insert_after": "custom_col_zatca"},
+        {"fieldname": "custom_ai_audit_trail", "label": "سجل تدقيق الذكاء الاصطناعي (AI Audit Trail)", "fieldtype": "Small Text", "insert_after": "custom_operation_id"}
+    ]
+    for f in zatca_je_fields:
+        cf_name = f"Journal Entry-{f['fieldname']}"
+        if not frappe.db.exists("Custom Field", cf_name):
+            try:
+                cf = frappe.new_doc("Custom Field")
+                cf.name = cf_name
+                cf.dt = "Journal Entry"
+                cf.fieldname = f["fieldname"]
+                cf.label = f["label"]
+                cf.fieldtype = f["fieldtype"]
+                if f.get("options"):
+                    cf.options = f["options"]
+                if f.get("default"):
+                    cf.default = f["default"]
+                cf.insert_after = f.get("insert_after")
+                cf.insert(ignore_permissions=True)
+            except Exception:
+                pass
+
+    # ZATCA Tax & Idempotency Custom Fields for Purchase Invoice & Sales Invoice
+    zatca_inv_fields = [
+        {"fieldname": "custom_tax_review_status", "label": "حالة التدقيق الضريبي", "fieldtype": "Select", "options": "\nمكتمل ومطابق\nقيد المراجعة الضريبية\nمستبعد من الاسترداد الضريبي\nغير خاضع للضريبة", "default": "مكتمل ومطابق", "insert_after": "custom_retention_amount"},
+        {"fieldname": "custom_has_valid_tax_invoice", "label": "توفر فاتورة ضريبية نظامية", "fieldtype": "Check", "default": "1", "insert_after": "custom_tax_review_status"},
+        {"fieldname": "custom_contract_type", "label": "نوع العقد التجاري", "fieldtype": "Select", "options": "\nعقد تجاري خاص\nعقد حكومي منصة اعتماد", "default": "عقد تجاري خاص", "insert_after": "custom_has_valid_tax_invoice"},
+        {"fieldname": "custom_operation_id", "label": "معرف العملية الموحد (Idempotency Key)", "fieldtype": "Data", "insert_after": "custom_contract_type"},
+        {"fieldname": "custom_ai_audit_trail", "label": "سجل تدقيق الذكاء الاصطناعي (AI Audit Trail)", "fieldtype": "Small Text", "insert_after": "custom_operation_id"}
+    ]
+    for dt in ["Purchase Invoice", "Sales Invoice"]:
+        for f in zatca_inv_fields:
+            cf_name = f"{dt}-{f['fieldname']}"
+            if not frappe.db.exists("Custom Field", cf_name):
+                try:
+                    cf = frappe.new_doc("Custom Field")
+                    cf.name = cf_name
+                    cf.dt = dt
+                    cf.fieldname = f["fieldname"]
+                    cf.label = f["label"]
+                    cf.fieldtype = f["fieldtype"]
+                    if f.get("options"):
+                        cf.options = f["options"]
+                    if f.get("default"):
+                        cf.default = f["default"]
+                    cf.insert_after = f.get("insert_after")
+                    cf.insert(ignore_permissions=True)
+                except Exception:
+                    pass
+
     frappe.db.commit()
 
 
@@ -1607,13 +1757,31 @@ def sync_raven_patch():
             print(f" -> Warning synchronizing Raven patch: {e}")
 
 
-def sanitize_database_test_data():
+def sanitize_database_test_data(force=False, confirmation_token=None):
     """
-    Purges all transactional test records across ERPNext, CRM, and Helpdesk,
-    and resets naming series counters in tabSeries back to 00001.
-    Master data and configuration are strictly preserved.
+
+    # Process sanitization
+    # Master data preserved
+    STRICT SAFETY LOCK: Execution is strictly forbidden on production site 'erp.local'.
     """
-    print("\n[Elsaidy ERP] Starting Complete Database Sanitization...")
+    current_site = getattr(frappe.local, "site", "")
+    if current_site in ["erp.local", "https://erp.elsaidy.org", "erp.elsaidy.org"]:
+        frappe.throw(
+            "🛑 خطأ أمان حرج: محاولة تشغيل دالة التطهير sanitize_database_test_data محظورة نهائياً وبشكل قطعي على بيئة الإنتاج erp.local لحماية البيانات المالية للمؤسسة!",
+            frappe.PermissionError
+        )
+
+    if not force or confirmation_token != "CONFIRM_ERASE_TEST_DATA_ONLY":
+        frappe.throw(
+            "🛑 إذن مرفوض: يجب تمرير المعامل force=True و confirmation_token='CONFIRM_ERASE_TEST_DATA_ONLY' صراحة لتشغيل هذه العملية على بيئة الاختبار.",
+            frappe.PermissionError
+        )
+    """
+
+    # Process sanitization
+    # Master data preserved
+    """
+
 
     transaction_doctypes = [
         "Payment Ledger Entry",

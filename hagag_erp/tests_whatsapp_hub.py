@@ -99,7 +99,8 @@ class TestElsaidyWhatsAppHub(unittest.TestCase):
 		# Clean up test JV
 		frappe.db.delete("Journal Entry", {"name": jv1.name})
 		frappe.db.delete("Journal Entry Account", {"parent": jv1.name})
-		frappe.db.delete("Custom Idempotency Log", {"operation_id": test_op_id})
+		if frappe.db.table_exists("Custom Idempotency Log"):
+			frappe.db.delete("Custom Idempotency Log", {"operation_id": test_op_id})
 		frappe.db.commit()
 
 

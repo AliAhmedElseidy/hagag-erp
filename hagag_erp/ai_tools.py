@@ -159,6 +159,74 @@ def get_gl_balance(account=None, cost_center=None, project=None, from_date=None,
     }
 
 
+def _resolve_leaf_account(acc_identifier, comp):
+    """
+    Resolves an account identifier (name or account_name) to an active leaf account.
+    If it's a group or not found, returns error information with suggestions.
+    """
+    # 1. Direct match on name
+    acc = frappe.db.get_value(
+        "Account",
+        {"name": acc_identifier, "company": comp},
+        ["name", "account_name", "is_group", "disabled", "parent_account", "account_type"],
+        as_dict=True
+    )
+
+    # 2. Match on account_name if not found
+    if not acc:
+        acc = frappe.db.get_value(
+            "Account",
+            {"account_name": acc_identifier, "company": comp},
+            ["name", "account_name", "is_group", "disabled", "parent_account", "account_type"],
+            as_dict=True
+        )
+
+    # 3. Fuzzy search if still not found
+    if not acc:
+        suggestions = frappe.get_all(
+            "Account",
+            filters={"company": comp, "is_group": 0, "disabled": 0, "account_name": ["like", f"%{acc_identifier}%"]},
+            fields=["name", "account_name", "parent_account"],
+            limit=5
+        )
+        return False, {
+            "status": "error",
+            "message": f"الحساب '{acc_identifier}' غير موجود في شجرة الحسابات للشركة {comp}.",
+            "suggested_accounts": suggestions
+        }
+
+    # 4. Check if disabled
+    if acc.disabled:
+        return False, {
+            "status": "error",
+            "message": f"الحساب '{acc.name}' معطل (Disabled) حالياً في النظام ولا يمكن إجراء حركات عليه."
+        }
+
+    # 5. Check if group account
+    if acc.is_group:
+        children = frappe.get_all(
+            "Account",
+            filters={"parent_account": acc.name, "company": comp, "is_group": 0, "disabled": 0},
+            fields=["name", "account_name"],
+            limit=10
+        )
+        if not children:
+            # Check all descendants
+            children = frappe.get_all(
+                "Account",
+                filters={"company": comp, "is_group": 0, "disabled": 0, "parent_account": ["like", f"%{acc.name}%"]},
+                fields=["name", "account_name"],
+                limit=10
+            )
+        return False, {
+            "status": "error",
+            "message": f"الحساب '{acc.name}' هو حساب رئيسي/تجميعي (Group Account) ولا يمكن إجراء قيود عليه مباشرة. يجب استخدام أحد الحسابات الفرعية التابعة له.",
+            "recommended_leaf_accounts": children
+        }
+
+    return True, acc
+
+
 @frappe.whitelist()
 def create_draft_journal_entry(
     company=None,
@@ -174,26 +242,37 @@ def create_draft_journal_entry(
 ):
     """
     Creates a Draft Journal Entry (docstatus = 0) with a debit line and credit line.
+    Fully hardened against Group Accounts and disabled accounts.
     Returns the created document name and direct clickable link URL.
     """
     comp = get_default_company(company)
     if not posting_date:
         posting_date = frappe.utils.today()
 
-    if not debit_account or not frappe.db.exists("Account", debit_account):
-        acc = frappe.db.get_value("Account", {"account_name": debit_account, "company": comp}, "name")
-        if acc:
-            debit_account = acc
-        else:
-            return {"status": "error", "message": f"الحساب المدين '{debit_account}' غير موجود في النظام."}
+    if not debit_account:
+        return {"status": "error", "message": "يجب تحديد الحساب المدين (debit_account)."}
+    if not credit_account:
+        return {"status": "error", "message": "يجب تحديد الحساب الدائن (credit_account)."}
 
-    if not credit_account or not frappe.db.exists("Account", credit_account):
-        acc = frappe.db.get_value("Account", {"account_name": credit_account, "company": comp}, "name")
-        if acc:
-            credit_account = acc
-        else:
-            return {"status": "error", "message": f"الحساب الدائن '{credit_account}' غير موجود في النظام."}
+    # Validate and resolve debit account
+    ok_debit, debit_res = _resolve_leaf_account(debit_account, comp)
+    if not ok_debit:
+        return debit_res
+    debit_doc = debit_res
+    debit_account = debit_doc["name"]
 
+    # Validate and resolve credit account
+    ok_credit, credit_res = _resolve_leaf_account(credit_account, comp)
+    if not ok_credit:
+        return credit_res
+    credit_doc = credit_res
+    credit_account = credit_doc["name"]
+
+    # Prevent identical debit and credit account
+    if debit_account == credit_account:
+        return {"status": "error", "message": f"لا يمكن أن يكون الحساب المدين والدائن متطابقين: '{debit_account}'."}
+
+    # Validate amount
     try:
         amt = float(amount or 0.0)
         if amt <= 0:
@@ -204,6 +283,11 @@ def create_draft_journal_entry(
     # Resolve default cost center if none provided
     if not cost_center:
         cost_center = frappe.db.get_value("Cost Center", {"company": comp, "is_group": 0}, "name")
+    else:
+        # Check cost center exists and is not group
+        cc_info = frappe.db.get_value("Cost Center", cost_center, ["name", "is_group"], as_dict=True)
+        if cc_info and cc_info.is_group:
+            cost_center = frappe.db.get_value("Cost Center", {"company": comp, "is_group": 0, "parent_cost_center": cost_center}, "name") or cost_center
 
     # Verify project if provided
     if project and not frappe.db.exists("Project", project):
@@ -211,9 +295,6 @@ def create_draft_journal_entry(
         project = proj if proj else None
 
     # Check party requirements for debit and credit accounts
-    debit_doc = frappe.get_cached_value("Account", debit_account, ["account_type"], as_dict=True) or {}
-    credit_doc = frappe.get_cached_value("Account", credit_account, ["account_type"], as_dict=True) or {}
-
     debit_party_type = None
     debit_party = None
     if debit_doc.get("account_type") in ["Receivable", "Payable"]:

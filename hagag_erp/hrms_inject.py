@@ -17,38 +17,52 @@ def ver(rel):
     return CACHE[rel]
 
 
-def tags():
-    css = ver("css/hagag_hrms.css")
-    js = ver("js/hagag_hrms.js")
-    a = '<link rel="stylesheet" '
-    a += 'href="/assets/hagag_erp/css/hagag_hrms.css?v=' + css + '">'
-    b = '<script src="/assets/hagag_erp/js/hagag_hrms.js?v='
-    b += js + '" defer></script>'
-    return a + b
+def whitelabel_tags():
+    css = ver("css/elsaidy_whitelabel.css")
+    js = ver("js/elsaidy_whitelabel.js")
+    tags = f'<link rel="stylesheet" href="/assets/hagag_erp/css/elsaidy_whitelabel.css?v={css}">'
+    tags += f'<script src="/assets/hagag_erp/js/elsaidy_whitelabel.js?v={js}" defer></script>'
+    return tags
 
 
-def rewrite(html):
+def rewrite_html(html, path=""):
+    # Manifest rewrite
     m = ver("manifest/manifest.webmanifest")
-    new = "/assets/hagag_erp/manifest/manifest.webmanifest?v=" + m
-    old = "/assets/hrms/frontend/manifest.webmanifest"
-    html = html.replace(old, new)
+    new_manifest = f"/assets/hagag_erp/manifest/manifest.webmanifest?v={m}"
+    html = html.replace("/assets/hrms/frontend/manifest.webmanifest", new_manifest)
+
+    # Title replacements
     html = html.replace("<title>Frappe HR</title>", "<title>Elsaidy HR</title>")
     html = html.replace("<title>Hagag HR</title>", "<title>Elsaidy HR</title>")
+    html = html.replace("<title>Frappe CRM</title>", "<title>Elsaidy CRM</title>")
+    html = html.replace("<title>Hagag CRM</title>", "<title>Elsaidy CRM</title>")
+    html = html.replace("<title>Frappe Helpdesk</title>", "<title>Elsaidy Support</title>")
+    html = html.replace("<title>Frappe Insights</title>", "<title>Elsaidy BI & Insights</title>")
+
     t = 'apple-mobile-web-app-title" content="'
     html = html.replace(t + "Frappe HR", t + "Elsaidy HR")
     html = html.replace(t + "Hagag HR", t + "Elsaidy HR")
-    return html.replace("</head>", tags() + "</head>", 1)
+    html = html.replace(t + "Frappe CRM", t + "Elsaidy CRM")
+    html = html.replace(t + "Frappe Helpdesk", t + "Elsaidy Support")
+
+    if "elsaidy_whitelabel.css" not in html and "</head>" in html:
+        html = html.replace("</head>", whitelabel_tags() + "</head>", 1)
+    return html
 
 
 def inject(response, request):
     try:
-        if not request.path.startswith("/hrms"):
-            return
         if response.status_code != 200 or response.mimetype != "text/html":
             return
-        html = response.get_data(as_text=True)
-        if "hagag_hrms.css" in html or "</head>" not in html:
+
+        path = request.path or ""
+        spa_prefixes = ("/hrms", "/crm", "/helpdesk", "/insights", "/raven", "/app", "/desk")
+        if not any(path.startswith(prefix) for prefix in spa_prefixes):
             return
-        response.set_data(rewrite(html))
+
+        html = response.get_data(as_text=True)
+        if "elsaidy_whitelabel.css" in html or "</head>" not in html:
+            return
+        response.set_data(rewrite_html(html, path))
     except Exception:
-        frappe.logger("hagag_erp").exception("hrms inject failed")
+        frappe.logger("hagag_erp").exception("spa whitelabel inject failed")

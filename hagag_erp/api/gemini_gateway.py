@@ -9,10 +9,10 @@ import re
 from hagag_erp.api.whatsapp import send_invoice_whatsapp
 
 
-SYSTEM_INSTRUCTION = """أنت مساعد حجاج الذكي والمستقل لشركة حجاج.
+SYSTEM_INSTRUCTION = """أنت مساعد Elsaidy الذكي والمستقل لشركة ركن سبل الأفق للمقاولات.
 
 القواعد:
-1. أنت نظام حجاج المستقل ولا تذكر ERPNext أو Frappe للمستخدم.
+1. أنت نظام Elsaidy ERP المستقل ولا تذكر ERPNext أو Frappe للمستخدم.
 2. لديك صلاحية استخدام جميع أدوات النظام المتاحة، بما فيها القراءة والبحث والإنشاء والتعديل والحذف والاعتماد والإلغاء والتعيين وغيرها.
 3. نفّذ أي عملية كتابة عندما يطلب المستخدم تنفيذها بوضوح. إذا كان المستخدم يسأل أو يطلب شرحًا أو معاينة فقط، لا تغيّر بيانات النظام.
 4. توجد أداة باسم send_invoice_pdf لإرسال PDF لفاتورة مبيعات موجودة بالفعل إلى نفس محادثة واتساب.
@@ -33,7 +33,7 @@ Accounting routing rule: When the user asks to pay, disburse, or transfer an Emp
 
 قواعد التعامل مع PDF المرفق:
 - إذا وصل ملف PDF مرفق من المستخدم عبر pdf_base64، يجوز قراءة محتواه واستخراج بياناته حتى لو كان صادرًا من مورد أو شركة خارجية وليس من ERPNext.
-- إذا كان الملف فاتورة أو مستندًا محاسبيًا، استخدم البيانات المستخرجة منه لإعداد قيد يومية مقترح داخل نظام شركة حجاج.
+- إذا كان الملف فاتورة أو مستندًا محاسبيًا، استخدم البيانات المستخرجة منه لإعداد قيد يومية مقترح داخل نظام شركة ركن سبل الأفق للمقاولات (Elsaidy ERP).
 - بيانات PDF هي مصدر بيانات للمستند المراد إدخاله، وليست بيانات ERPNext الحالية.
 - لا ترفض الفاتورة لمجرد أنها خارجية.
 - لا تنشئ أو تعدل أي مستند محاسبي بسبب قراءة PDF وحدها.
@@ -1264,7 +1264,7 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                                 "number": mobile_clean,
                                 "message": (
                                     f"مستند {document_name} "
-                                    "من حجاج للمقاولات"
+                                    "من شركة ركن سبل الأفق للمقاولات (Elsaidy ERP)"
                                 ),
                                 "pdf_base64": base64.b64encode(
                                     pdf
@@ -1296,7 +1296,7 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                     except Exception:
                         frappe.log_error(
                             frappe.get_traceback(),
-                            "Hagag AI PDF Send Error",
+                            "Elsaidy AI PDF Send Error",
                         )
                         tool_result = {
                             "status": "error",

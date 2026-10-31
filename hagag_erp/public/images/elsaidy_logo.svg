@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 64" width="320" height="64" fill="none">
+  <defs>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE68A" />
+      <stop offset="50%" stop-color="#D97706" />
+      <stop offset="100%" stop-color="#B45309" />
+    </linearGradient>
+    <linearGradient id="blueGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E3A8A" />
+      <stop offset="100%" stop-color="#0F172A" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <!-- Emblem Background Shield -->
+  <g filter="url(#shadow)">
+    <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#blueGrad)" stroke="url(#goldGrad)" stroke-width="2" />
+    <!-- Architectural Stylized Monogram E -->
+    <path d="M22 17 H42 V23 H30 V29 H39 V35 H30 V41 H42 V47 H22 Z" fill="url(#goldGrad)" />
+    <!-- Chevron Tower Accent -->
+    <path d="M42 28 L46 32 L42 36 Z" fill="#FDE68A" />
+  </g>
+
+  <!-- Arabic Typography -->
+  <text x="72" y="31" font-family="'Cairo', 'Tajawal', 'Segoe UI', system-ui, sans-serif" font-size="20" font-weight="800" fill="#0F172A">
+    شركة الصعيدي <tspan fill="url(#goldGrad)">للمقاولات</tspan>
+  </text>
+
+  <!-- English Subtitle & Badge -->
+  <text x="73" y="49" font-family="'Inter', 'Segoe UI', system-ui, sans-serif" font-size="11" font-weight="700" letter-spacing="2" fill="#475569">
+    ELSAIDY ERP <tspan fill="#D97706" font-size="9" font-weight="800">| RKN SUITE</tspan>
+  </text>
+</svg>

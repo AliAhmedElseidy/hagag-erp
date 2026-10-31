@@ -2,7 +2,8 @@ app_name = "hagag_erp"
 app_title = "Elsaidy ERP"
 app_publisher = "Elsaidy"
 app_description = "Custom Frappe app for Elsaidy ERP customizations"
-app_email = "info@elsaidy.com"
+app_email = "info@elsaidy.org"
+app_logo_url = "/assets/hagag_erp/images/elsaidy_logo.svg"
 app_license = "mit"
 
 # Apps
@@ -214,7 +215,7 @@ after_request = ["hagag_erp.hrms_inject.inject"]
 # ----------------
 after_migrate = ["hagag_erp.setup.sync_elsaidy_customizations"]
 
-app_include_css = ["/assets/hagag_erp/css/hagag_desk_v16.css"]
-app_include_js = ["/assets/hagag_erp/js/hagag_desk_v16.js", "/assets/hagag_erp/js/hagag_chat.js"]
-web_include_css = ["/assets/hagag_erp/css/hagag_web_v15.css"]
-web_include_js = ["/assets/hagag_erp/js/hagag_web_v15.js"]
+app_include_css = ["/assets/hagag_erp/css/hagag_desk_v16.css", "/assets/hagag_erp/css/elsaidy_whitelabel.css"]
+app_include_js = ["/assets/hagag_erp/js/hagag_desk_v16.js", "/assets/hagag_erp/js/hagag_chat.js", "/assets/hagag_erp/js/elsaidy_whitelabel.js"]
+web_include_css = ["/assets/hagag_erp/css/hagag_web_v15.css", "/assets/hagag_erp/css/elsaidy_whitelabel.css"]
+web_include_js = ["/assets/hagag_erp/js/hagag_web_v15.js", "/assets/hagag_erp/js/elsaidy_whitelabel.js"]

@@ -1,0 +1,62 @@
+/* ============================================================
+   Elsaidy ERP - Universal Enterprise White-Labeling & Theme
+   شركة ركن سبل الأفق للمقاولات
+   ============================================================ */
+
+/* 1. Complete Suppression of Onboarding Popups & Tours */
+.onboarding-widget,
+.onboarding-banner,
+.onboarding-card,
+.getting-started,
+[class*="onboarding"],
+[class*="getting-started"],
+.tour-popup,
+.driver-popover,
+.driver-overlay,
+.fc-onboarding,
+.hd-onboarding,
+[data-tour],
+[id*="onboarding"],
+.shepherd-element,
+.shepherd-modal-overlay-container {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+/* 2. Hide Any Residual Vendor Links (Frappe, ERPNext, Hagag) */
+a[href*="frappe.io"],
+a[href*="erpnext.com"],
+a[href*="frappecloud.com"],
+a[href*="hagagco.com"],
+.footer-powered,
+.powered-by-frappe,
+.frappe-badge,
+.erpnext-badge {
+    display: none !important;
+}
+
+/* 3. Executive Navbar & Header Styling */
+.navbar-brand .app-logo,
+.app-logo,
+.brand-logo {
+    max-height: 38px !important;
+    width: auto !important;
+    object-fit: contain !important;
+}
+
+/* 4. Luxury Accent Colors & Typography */
+:root {
+    --elsaidy-primary: #1e3a8a;
+    --elsaidy-primary-dark: #0f172a;
+    --elsaidy-gold: #d97706;
+    --elsaidy-gold-light: #fef3c7;
+    --primary: #1e3a8a !important;
+    --primary-color: #1e3a8a !important;
+}
+
+/* 5. Clean Professional RTL Support */
+[dir="rtl"] body {
+    font-family: 'Cairo', 'Tajawal', 'Segoe UI', system-ui, -apple-system, sans-serif !important;
+}

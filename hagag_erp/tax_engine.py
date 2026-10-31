@@ -24,6 +24,9 @@ def to_decimal(val, precision="0.01") -> Decimal:
     return Decimal(str(val).strip()).quantize(Decimal(precision), rounding=ROUND_HALF_UP)
 
 
+round_currency = to_decimal
+
+
 def get_target_company(company=None) -> tuple:
     """Discovers the active company name and abbreviation."""
     if company and frappe.db.exists("Company", company):
@@ -114,30 +117,38 @@ def get_company_tax_accounts(company=None) -> dict:
 
 
 def evaluate_vat_eligibility_and_split(
-    expense_account,
-    amount,
+    amount=None,
+    account_code=None,
+    expense_account=None,
+    is_taxable=True,
     amount_basis="inclusive",
-    usage_type="unknown",
-    has_valid_tax_invoice=False,
+    usage_type=None,
+    has_valid_tax_invoice=None,
+    non_recoverable_policy="capitalize_to_expense",
     tax_treatment_policy="capitalize_to_expense",
     company=None,
-    vat_rate_pct=Decimal("15.00")
+    vat_rate_pct=Decimal("15.00"),
+    **kwargs
 ) -> dict:
     """
     Evaluates ZATCA Article 50 VAT recovery eligibility and splits gross / base / tax.
-
-    Parameters:
-    - expense_account: Account string
-    - amount: float, int, str or Decimal
-    - amount_basis: 'inclusive' (gross includes 15% VAT), 'exclusive' (amount is net, add 15%), 'no_vat'
-    - usage_type:
-        * 'commercial_equipment': heavy site machinery, excavators, cranes, generators -> eligible if invoice valid
-        * 'restricted_vehicle': private/passenger vehicle, sedan, personal car -> non-recoverable per Art. 50
-        * 'general_business': project supplies, maintenance, materials
-        * 'unknown': default uncertain -> MUST default to 'pending_review'
-    - has_valid_tax_invoice: bool (must carry supplier VAT number and mandatory ZATCA fields)
-    - tax_treatment_policy: 'capitalize_to_expense' (default) or 'designated_expense_account'
+    Supports Decimal precision (0.01 SAR) and flexible calling conventions.
     """
+    # Handle swapped positional arguments if called as (expense_account, amount)
+    if isinstance(amount, str) and ("-" in amount or not any(c.isdigit() for c in amount)):
+        real_acc = amount
+        amount = account_code
+        account_code = real_acc
+
+    acc = expense_account or account_code or kwargs.get("account") or ""
+    policy = tax_treatment_policy or non_recoverable_policy
+    if has_valid_tax_invoice is None:
+        has_valid_tax_invoice = False
+    if not is_taxable:
+        amount_basis = "no_vat"
+    if not usage_type:
+        usage_type = "unknown"
+
     tax_accounts = get_company_tax_accounts(company)
     amt_dec = to_decimal(amount)
 
@@ -145,7 +156,7 @@ def evaluate_vat_eligibility_and_split(
     one_plus_rate = Decimal("1.00") + rate_factor
 
     # Inherently non-taxable accounts (government fees, municipal penalties, un-registered subc)
-    acc_lower = (expense_account or "").lower()
+    acc_lower = (acc or "").lower()
     is_exempt = any(k in acc_lower for k in ["5230", "رسوم حكومية", "بلدية", "غرامة", "تراخيص"])
 
     if amount_basis == "no_vat" or is_exempt:
@@ -155,95 +166,118 @@ def evaluate_vat_eligibility_and_split(
         eligibility_status = "exempt_or_zero"
         target_vat_account = None
         debit_lines = [
-            {"account": expense_account, "amount": base_amount, "description": "المصروف (معفى أو بدون ضريبة)"}
+            {"account": acc, "amount": base_amount, "description": "المصروف (معفى أو بدون ضريبة)"}
         ]
-        return {
-            "eligibility_status": eligibility_status,
-            "amount_basis": amount_basis,
-            "gross_amount": gross_amount,
-            "base_amount": base_amount,
-            "vat_amount": vat_amount,
-            "vat_rate_pct": vat_rate_pct,
-            "target_vat_account": target_vat_account,
-            "tax_treatment_policy": tax_treatment_policy,
-            "debit_lines": debit_lines
-        }
+    else:
+        # Split Base and VAT
+        if amount_basis == "inclusive":
+            gross_amount = amt_dec
+            base_amount = (gross_amount / one_plus_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            vat_amount = gross_amount - base_amount
+        else:  # exclusive
+            base_amount = amt_dec
+            vat_amount = (base_amount * rate_factor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            gross_amount = base_amount + vat_amount
 
-    # Split Base and VAT
-    if amount_basis == "inclusive":
-        gross_amount = amt_dec
-        base_amount = (gross_amount / one_plus_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        vat_amount = gross_amount - base_amount
-    else:  # exclusive
-        base_amount = amt_dec
-        vat_amount = (base_amount * rate_factor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        gross_amount = base_amount + vat_amount
+        # Check Fuel & Vehicles Rule (5120 / fuel keywords)
+        is_fuel = any(k in acc_lower for k in ["5120", "وقود", "بنزين", "ديزل", "محروقات", "fuel", "gasoline", "diesel"])
 
-    # Check Fuel & Vehicles Rule (5120 / fuel keywords)
-    is_fuel = any(k in acc_lower for k in ["5120", "وقود", "بنزين", "ديزل", "محروقات", "fuel", "gasoline", "diesel"])
-
-    if is_fuel or usage_type in ["commercial_equipment", "restricted_vehicle"]:
-        if usage_type == "commercial_equipment" and has_valid_tax_invoice:
-            eligibility_status = "approved_recoverable"
-            target_vat_account = tax_accounts["recoverable_vat"]
-            debit_lines = [
-                {"account": expense_account, "amount": base_amount, "description": "مصروف وقود/تشغيل معدات تجارية"},
-                {"account": target_vat_account, "amount": vat_amount, "description": "ضريبة مدخلات 15% مستردة نظامياً (معدة تجارية)"}
-            ]
-        elif usage_type == "restricted_vehicle":
-            eligibility_status = "non_recoverable"
-            if tax_treatment_policy == "designated_expense_account":
-                target_vat_account = tax_accounts["non_recoverable_vat"]
+        if is_fuel or usage_type in ["commercial_equipment", "restricted_vehicle"]:
+            if usage_type == "commercial_equipment" and has_valid_tax_invoice:
+                eligibility_status = "approved_recoverable"
+                target_vat_account = tax_accounts["recoverable_vat"]
                 debit_lines = [
-                    {"account": expense_account, "amount": base_amount, "description": "مصروف وقود سيارة خاصة/مقيدة"},
-                    {"account": target_vat_account, "amount": vat_amount, "description": "ضريبة مدخلات غير قابلة للاسترداد (المادة 50)"}
+                    {"account": acc, "amount": base_amount, "description": "مصروف وقود/تشغيل معدات تجارية"},
+                    {"account": target_vat_account, "amount": vat_amount, "description": "ضريبة مدخلات 15% مستردة نظامياً (معدة تجارية)"}
+                ]
+            elif usage_type == "restricted_vehicle":
+                eligibility_status = "non_recoverable"
+                if policy == "designated_expense_account" or policy == "expense_account":
+                    target_vat_account = tax_accounts["non_recoverable_vat"]
+                    debit_lines = [
+                        {"account": acc, "amount": base_amount, "description": "مصروف وقود سيارة خاصة/مقيدة"},
+                        {"account": target_vat_account, "amount": vat_amount, "description": "ضريبة مدخلات غير قابلة للاسترداد (المادة 50)"}
+                    ]
+                else:
+                    # Default: Capitalize directly onto original expense
+                    target_vat_account = None
+                    debit_lines = [
+                        {"account": acc, "amount": gross_amount, "description": "مصروف وقود سيارة مقيدة (رسملة الضريبة بالكامل)"}
+                    ]
+            else:
+                # Default for unknown / missing commercial equipment confirmation / missing invoice
+                eligibility_status = "pending_review"
+                target_vat_account = tax_accounts["pending_vat"]
+                debit_lines = [
+                    {"account": acc, "amount": base_amount, "description": "مصروف وقود (صافي الأساس)"},
+                    {"account": target_vat_account, "amount": vat_amount, "description": "ضريبة مدخلات 15% معلقة تحت المراجعة (المادة 50 ZATCA)"}
+                ]
+        else:
+            # General Contracting Business Expenses (Materials, Tools, Rent, Site Logistics)
+            if has_valid_tax_invoice:
+                eligibility_status = "approved_recoverable"
+                target_vat_account = tax_accounts["recoverable_vat"]
+                debit_lines = [
+                    {"account": acc, "amount": base_amount, "description": "مصروف تشغيلي مباشر"},
+                    {"account": target_vat_account, "amount": vat_amount, "description": "ضريبة القيمة المضافة للمدخلات 15%"}
                 ]
             else:
-                # Default: Capitalize directly onto original expense
-                target_vat_account = None
+                eligibility_status = "pending_review"
+                target_vat_account = tax_accounts["pending_vat"]
                 debit_lines = [
-                    {"account": expense_account, "amount": gross_amount, "description": "مصروف وقود سيارة مقيدة (رسملة الضريبة بالكامل)"}
+                    {"account": acc, "amount": base_amount, "description": "مصروف تشغيلي (صافي الأساس)"},
+                    {"account": target_vat_account, "amount": vat_amount, "description": "ضريبة مدخلات معلقة تحت المراجعة والاعتماد (عدم ثبوت الفاتورة)"}
                 ]
-        else:
-            # Default for unknown / missing commercial equipment confirmation / missing invoice
-            eligibility_status = "pending_review"
-            target_vat_account = tax_accounts["pending_vat"]
-            debit_lines = [
-                {"account": expense_account, "amount": base_amount, "description": "مصروف وقود (صافي الأساس)"},
-                {"account": target_vat_account, "amount": vat_amount, "description": "ضريبة مدخلات 15% معلقة تحت المراجعة (المادة 50 ZATCA)"}
-            ]
+
+    # Map Arabic tax_status and reason
+    if eligibility_status == "approved_recoverable":
+        tax_status = "مكتمل ومطابق"
+        reason = "ضريبة مدخلات مستردة نظامياً ومطابقة لاشتراطات هيئة الزكاة والضريبة والجمارك (ZATCA)"
+        tax_eligible = vat_amount
+        tax_pending = Decimal("0.00")
+        tax_non_recoverable = Decimal("0.00")
+    elif eligibility_status == "pending_review":
+        tax_status = "قيد المراجعة الضريبية"
+        reason = "ضريبة مدخلات معلقة قيد المراجعة والتحقق (عدم تحديد نوع المعدة التجارية أو عدم ثبوت الفاتورة الضريبية وفق المادة 50)"
+        tax_eligible = Decimal("0.00")
+        tax_pending = vat_amount
+        tax_non_recoverable = Decimal("0.00")
+    elif eligibility_status == "non_recoverable":
+        tax_status = "مستبعد من الاسترداد الضريبي"
+        reason = "ضريبة مدخلات غير قابلة للاسترداد وفقاً للمادة 50 (مركبة ركاب خاصة/مقيدة أو مصروف غير تجاري)"
+        tax_eligible = Decimal("0.00")
+        tax_pending = Decimal("0.00")
+        tax_non_recoverable = vat_amount
     else:
-        # General Contracting Business Expenses (Materials, Tools, Rent, Site Logistics)
-        if has_valid_tax_invoice:
-            eligibility_status = "approved_recoverable"
-            target_vat_account = tax_accounts["recoverable_vat"]
-            debit_lines = [
-                {"account": expense_account, "amount": base_amount, "description": "مصروف تشغيلي مباشر"},
-                {"account": target_vat_account, "amount": vat_amount, "description": "ضريبة القيمة المضافة للمدخلات 15%"}
-            ]
-        else:
-            # Missing valid tax invoice -> Must NOT claim input VAT; route to pending review
-            eligibility_status = "pending_review"
-            target_vat_account = tax_accounts["pending_vat"]
-            debit_lines = [
-                {"account": expense_account, "amount": base_amount, "description": "مصروف تشغيلي (صافي الأساس)"},
-                {"account": target_vat_account, "amount": vat_amount, "description": "ضريبة مدخلات معلقة تحت المراجعة والاعتماد (عدم ثبوت الفاتورة)"}
-            ]
+        tax_status = "غير خاضع للضريبة"
+        reason = "مصروف أو حركة غير خاضعة لضريبة القيمة المضافة"
+        tax_eligible = Decimal("0.00")
+        tax_pending = Decimal("0.00")
+        tax_non_recoverable = Decimal("0.00")
 
     return {
         "eligibility_status": eligibility_status,
+        "tax_status": tax_status,
+        "reason": reason,
         "amount_basis": amount_basis,
         "gross_amount": gross_amount,
         "base_amount": base_amount,
+        "net_expense": base_amount,
         "vat_amount": vat_amount,
+        "tax_eligible": tax_eligible,
+        "tax_pending": tax_pending,
+        "tax_non_recoverable": tax_non_recoverable,
         "vat_rate_pct": vat_rate_pct,
         "target_vat_account": target_vat_account,
-        "tax_treatment_policy": tax_treatment_policy,
+        "tax_eligible_account": tax_accounts["recoverable_vat"],
+        "tax_pending_account": tax_accounts["pending_vat"],
+        "tax_non_recoverable_account": tax_accounts["non_recoverable_vat"],
+        "tax_treatment_policy": policy,
         "debit_lines": debit_lines
     }
 
 
-def validate_balanced_entry(accounts_lines) -> Decimal:
+def validate_balanced_entry(accounts_lines, company=None) -> Decimal:
     """
     Verifies that total debits == total credits to 0.01 SAR.
     Verifies that Input VAT (1510, 1520, 5235) and expenses are strictly on DEBIT side.
@@ -286,17 +320,18 @@ def validate_tax_review_before_submit(doc, method=None):
     Blocks document submission if tax review status is 'pending_review' or contains account 1520.
     """
     # 1. Check custom_tax_review_status field
-    if getattr(doc, "custom_tax_review_status", None) == "pending_review":
+    status = getattr(doc, "custom_tax_review_status", None)
+    if status in ["pending_review", "قيد المراجعة الضريبية"]:
         frappe.throw(
-            _("🛑 لا يمكن اعتماد أو ترحيل هذا المستند ({0}): الحالة الضريبية للمستند هي 'معلق تحت المراجعة' (Pending Review) وفقاً للمادة 50 من لائحة هيئة الزكاة والضريبة والجمارك (ZATCA). يجب التحقق من أهلية الفواتير الضريبية وتعديل الحالة إلى 'معتمد للاسترداد' أو 'غير مسترد' بواسطة محاسب معتمد قبل الاعتماد النهائي.")
-            .format(doc.name),
+            _("🛑 لا يمكن اعتماد أو ترحيل هذا المستند ({0}): الحالة الضريبية للمستند هي '{1}' وفقاً للمادة 50 من لائحة هيئة الزكاة والضريبة والجمارك (ZATCA). يجب التحقق من أهلية الفواتير الضريبية وتعديل الحالة إلى 'مكتمل ومطابق' بواسطة محاسب معتمد قبل الاعتماد النهائي.")
+            .format(doc.name, status),
             title=_("حظر اعتماد - ضريبة معلقة تحت المراجعة")
         )
 
     # 2. Check line items for account 1520 (Pending Review Account)
     if doc.doctype == "Journal Entry":
         for row in doc.accounts:
-            if "1520" in (row.account or "") or "تحت المراجعة" in (row.account or ""):
+            if any(k in (row.account or "") for k in ["1520", "تحت المراجعة", "قيد المراجعة"]):
                 frappe.throw(
                     _("🛑 لا يمكن اعتماد قيد اليومية ({0}): يتضمن القيد حساب ضريبة المدخلات المعلقة تحت المراجعة ({1}). يلزم تسوية هذا الحساب بنقله إلى حساب ضريبة المدخلات المستردة (1510) أو تحميله على المصروف قبل الترحيل إلى الأستاذ العام.")
                     .format(doc.name, row.account),
@@ -305,7 +340,7 @@ def validate_tax_review_before_submit(doc, method=None):
 
     elif doc.doctype == "Purchase Invoice":
         for row in getattr(doc, "taxes", []):
-            if "1520" in (row.account_head or "") or "تحت المراجعة" in (row.account_head or ""):
+            if any(k in (row.account_head or "") for k in ["1520", "تحت المراجعة", "قيد المراجعة"]):
                 frappe.throw(
                     _("🛑 لا يمكن اعتماد فاتورة المشتريات ({0}): يتضمن جدول الضرائب حساب ضريبة معلقة تحت المراجعة ({1}). يجب التحقق من الأهلية الضريبية للفاتورة قبل الاعتماد.")
                     .format(doc.name, row.account_head),

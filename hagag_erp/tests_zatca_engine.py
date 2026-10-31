@@ -52,6 +52,12 @@ def run_all_tests():
         results.append({"name": test_name, "passed": passed, "details": details})
         print(f"[{status}] {test_name}: {details}")
 
+    def find_account_line(lines_dict, code):
+        for acc_name, val in lines_dict.items():
+            if str(code) in acc_name:
+                return val
+        return None
+
     # Ensure accounts exist on test site
     comp = frappe.db.get_single_value("Global Defaults", "default_company") or "ركن سبل الافق"
     _ensure_test_accounts(comp)
@@ -76,9 +82,9 @@ def run_all_tests():
 
         # Check account rows
         lines1 = {row.account: (row.debit_in_account_currency, row.credit_in_account_currency) for row in je1.accounts}
-        assert lines1.get("5120 - مصروف الوقود والمحروقات - Rkn") == (200.0, 0.0), f"5120 debit incorrect: {lines1}"
-        assert lines1.get("1520 - ضريبة مدخلات معلقة قيد المراجعة - Rkn") == (30.0, 0.0), f"1520 debit incorrect: {lines1}"
-        assert lines1.get("1110 - النقدية في الصندوق - Rkn") == (0.0, 230.0), f"1110 credit incorrect: {lines1}"
+        assert find_account_line(lines1, "5120") == (200.0, 0.0), f"5120 debit incorrect: {lines1}"
+        assert find_account_line(lines1, "1520") == (30.0, 0.0), f"1520 debit incorrect: {lines1}"
+        assert find_account_line(lines1, "1110") == (0.0, 230.0), f"1110 credit incorrect: {lines1}"
 
         # Test pre-submit hook: must raise ValidationError
         submit_blocked = False
@@ -116,9 +122,9 @@ def run_all_tests():
         assert je2.custom_tax_review_status == "مكتمل ومطابق", f"Expected 'مكتمل ومطابق', got '{je2.custom_tax_review_status}'"
 
         lines2 = {row.account: (row.debit_in_account_currency, row.credit_in_account_currency) for row in je2.accounts}
-        assert lines2.get("5120 - مصروف الوقود والمحروقات - Rkn") == (200.0, 0.0), f"5120 debit incorrect: {lines2}"
-        assert lines2.get("1510 - ضريبة القيمة المضافة للمدخلات 15% - Rkn") == (30.0, 0.0), f"1510 debit incorrect: {lines2}"
-        assert lines2.get("1110 - النقدية في الصندوق - Rkn") == (0.0, 230.0), f"1110 credit incorrect: {lines2}"
+        assert find_account_line(lines2, "5120") == (200.0, 0.0), f"5120 debit incorrect: {lines2}"
+        assert find_account_line(lines2, "1510") == (30.0, 0.0), f"1510 debit incorrect: {lines2}"
+        assert find_account_line(lines2, "1110") == (0.0, 230.0), f"1110 credit incorrect: {lines2}"
 
         log_result("Test 2: Heavy machinery diesel routes to 1510 recoverable VAT", True, f"Doc: {je2.name}, 5120=200, 1510=30")
     except Exception as e:
@@ -145,8 +151,8 @@ def run_all_tests():
         assert je3.custom_tax_review_status == "مستبعد من الاسترداد الضريبي", f"Expected 'مستبعد من الاسترداد الضريبي', got '{je3.custom_tax_review_status}'"
 
         lines3 = {row.account: (row.debit_in_account_currency, row.credit_in_account_currency) for row in je3.accounts}
-        assert lines3.get("5120 - مصروف الوقود والمحروقات - Rkn") == (230.0, 0.0), f"5120 must be 230.0 capitalized, got {lines3}"
-        assert "1510 - ضريبة القيمة المضافة للمدخلات 15% - Rkn" not in lines3, "Restricted vehicle must NOT touch 1510!"
+        assert find_account_line(lines3, "5120") == (230.0, 0.0), f"5120 must be 230.0 capitalized, got {lines3}"
+        assert find_account_line(lines3, "1510") is None, "Restricted vehicle must NOT touch 1510!"
 
         log_result("Test 3: Restricted passenger car capitalizes VAT to expense", True, f"Doc: {je3.name}, 5120=230 (VAT capitalized), 1510=0")
     except Exception as e:
@@ -284,10 +290,10 @@ def run_all_tests():
 def _ensure_test_accounts(comp):
     """Creates required test accounts on isolated test site if missing."""
     accounts = [
-        {"account_name": "ضريبة مدخلات معلقة قيد المراجعة", "account_number": "1520", "parent_account": f"1500 - الأصول المتداولة الأخرى - {comp}", "account_type": "Tax", "root_type": "Asset"},
+        {"account_name": "ضريبة مدخلات معلقة تحت المراجعة والاعتماد", "account_number": "1520", "parent_account": f"1500 - الأصول المتداولة الأخرى - {comp}", "account_type": "Tax", "root_type": "Asset"},
         {"account_name": "ضريبة القيمة المضافة للمدخلات 15%", "account_number": "1510", "parent_account": f"1500 - الأصول المتداولة الأخرى - {comp}", "account_type": "Tax", "root_type": "Asset"},
         {"account_name": "ضريبة القيمة المضافة للمخرجات 15%", "account_number": "2330", "parent_account": f"2300 - الخصوم المتداولة الأخرى - {comp}", "account_type": "Tax", "root_type": "Liability"},
-        {"account_name": "ضريبة مدخلات غير مستردة (مصروف)", "account_number": "5235", "parent_account": f"5200 - المصاريف العمومية والإدارية - {comp}", "account_type": "Expense", "root_type": "Expense"},
+        {"account_name": "ضريبة مدخلات غير قابلة للاسترداد", "account_number": "5235", "parent_account": f"5200 - المصاريف العمومية والإدارية - {comp}", "account_type": "Expense", "root_type": "Expense"},
         {"account_name": "مصروف الوقود والمحروقات", "account_number": "5120", "parent_account": f"5100 - تكاليف العمليات والمشاريع المباشرة - {comp}", "account_type": "Expense", "root_type": "Expense"},
         {"account_name": "مواد ومهمات تشغيل المشاريع", "account_number": "5150", "parent_account": f"5100 - تكاليف العمليات والمشاريع المباشرة - {comp}", "account_type": "Expense", "root_type": "Expense"},
         {"account_name": "النقدية في الصندوق", "account_number": "1110", "parent_account": f"1100 - الأصول المتداولة - {comp}", "account_type": "Cash", "root_type": "Asset"},

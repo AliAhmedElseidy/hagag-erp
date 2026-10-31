@@ -306,7 +306,7 @@ def validate_balanced_entry(accounts_lines, company=None) -> Decimal:
         total_debit += d
         total_credit += c
 
-    diff = (total_debit - total_credit).abs()
+    diff = abs(total_debit - total_credit)
     if diff > Decimal("0.01"):
         frappe.throw(
             _("🛑 القيد غير متزن محاسبياً! إجمالي المدين: {0} ريال، إجمالي الدائن: {1} ريال (الفارق: {2} ريال). يجب أن يتساوى المدين والدائن بدقة 0.01 ريال.")

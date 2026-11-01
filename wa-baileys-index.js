@@ -21,7 +21,8 @@ const app = express();
 const logger = pino({ level: 'warn' });
 
 const PORT = process.env.PORT || 3000;
-const API_TOKEN = process.env.WA_API_TOKEN || 'HAGAG_WA_7f3c9a2d6e4b8a1c';
+const API_TOKEN = process.env.WA_API_TOKEN || '';
+if (!API_TOKEN) throw new Error('WA_API_TOKEN must be provided through the environment');
 const SESSION_DIR = process.env.SESSION_DIR || '/app/session';
 const FRAPPE_WEBHOOK_URL = process.env.FRAPPE_WEBHOOK_URL || 'http://backend:8000/api/method/hagag_erp.whatsapp_bridge.receive_baileys_event';
 const FRAPPE_HOST = process.env.FRAPPE_HOST || 'erp.local';
@@ -243,8 +244,7 @@ function normalizeNumber(number) {
 function authorized(req) {
   const auth = req.headers.authorization || '';
   const headerToken = req.headers['x-api-token'] || '';
-  const queryToken = req.query.token || '';
-  return auth === `Bearer ${API_TOKEN}` || headerToken === API_TOKEN || queryToken === API_TOKEN;
+  return auth === `Bearer ${API_TOKEN}` || headerToken === API_TOKEN;
 }
 
 function cancelReconnectTimer() {
@@ -292,105 +292,13 @@ function clearSessionDirectory() {
 
 // ─── Targeted Session Healing (Bad MAC / Decrypt Error Recovery) ───────────────
 async function healTargetSession(targetId) {
-  if (!targetId) return { status: 'error', message: 'Target ID / JID is required' };
-
-  // Check cooldown
-  const now = Date.now();
-  const history = healCooldownMap.get(targetId) || { count: 0, lastAttempt: 0 };
-  if (history.count >= MAX_HEAL_ATTEMPTS && (now - history.lastAttempt) < HEAL_COOLDOWN_MS) {
-    const waitSec = Math.ceil((HEAL_COOLDOWN_MS - (now - history.lastAttempt)) / 1000);
-    addLog('warn', `[SessionHeal] Cooldown active for ${targetId}. Try again in ${waitSec}s.`);
-    return { status: 'cooldown', message: `العملية في فترة التهدئة لهذا المعرف. انتظر ${waitSec} ثانية.` };
-  }
-
-  addLog('info', `[SessionHeal] Diagnosing and healing session for target: ${targetId}...`);
-  metrics.healOperations++;
-
-  // Normalize target identifier
-  const cleanId = String(targetId).trim();
-  const isLid = cleanId.includes('@lid');
-  const isGroup = cleanId.includes('@g.us');
-  let signalUser = cleanId.split('@')[0].split(':')[0];
-
-  // If provided as 251036744843464.0, strip device
-  const addrMatch = signalUser.match(/^(\d+)\.\d+$/);
-  if (addrMatch) {
-    signalUser = addrMatch[1];
-  }
-
-  let deletedCount = 0;
-  const deletedFiles = [];
-
-  try {
-    if (fs.existsSync(SESSION_DIR)) {
-      const files = fs.readdirSync(SESSION_DIR);
-      for (const file of files) {
-        // STRICT SAFETY: Never touch creds.json, core auth keys, or persistent mappings
-        if (file === 'creds.json' || file.startsWith('app-state-sync-key') || file === 'contact_mappings.json' || file === 'message_cache') {
-          continue;
-        }
-
-        let isMatch = false;
-        if (isGroup) {
-          // If group, clear sender keys for this group
-          if (file.startsWith(`sender-key-${signalUser}`) || file.startsWith(`sender-key-memory-${signalUser}`)) {
-            isMatch = true;
-          }
-        } else {
-          // Direct chat / LID / PN session file
-          if (file.startsWith(`session-${signalUser}`)) {
-            isMatch = true;
-          }
-        }
-
-        if (isMatch) {
-          try {
-            fs.unlinkSync(path.join(SESSION_DIR, file));
-            deletedCount++;
-            deletedFiles.push(file);
-            addLog('info', `[SessionHeal] Safely removed corrupted key file: ${file}`);
-          } catch (delErr) {
-            addLog('warn', `[SessionHeal] Could not delete ${file}: ${delErr.message}`);
-          }
-        }
-      }
-    }
-
-    // Flush in-memory signalCache for this user
-    try {
-      let flushedKeys = 0;
-      for (const k of signalCache.keys()) {
-        if (k.includes(signalUser)) {
-          signalCache.del(k);
-          flushedKeys++;
-        }
-      }
-      if (flushedKeys > 0) {
-        addLog('info', `[SessionHeal] Flushed ${flushedKeys} in-memory signal keys for ${signalUser}`);
-      }
-    } catch (cErr) {
-      addLog('warn', `[SessionHeal] Could not clear signalCache: ${cErr.message}`);
-    }
-
-    // Update cooldown
-    healCooldownMap.set(targetId, {
-      count: history.count + 1,
-      lastAttempt: now
-    });
-
-    return {
-      status: 'ok',
-      target: targetId,
-      deleted_files_count: deletedCount,
-      deleted_files: deletedFiles,
-      session_reasserted: false,
-      message: `تم تطهير ملفات وكاش الجلسة بأمان للمعرف (${targetId}). الملفات المعالجة: ${deletedCount}.`
-    };
-
-  } catch (err) {
-    addLog('error', `[SessionHeal] Error healing session for ${targetId}:`, err.message);
-    return { status: 'error', error: err.message };
-  }
+  // Automatic or manual deletion of live Signal keys is unsafe.
+  // Retain this endpoint as an explicit non-destructive diagnostic response.
+  addLog('warn', '[SessionHeal] Deprecated destructive healing blocked');
+  return {
+    status: 'disabled',
+    message: 'Destructive Signal key healing is disabled. Use read-only diagnostics and controlled re-pairing only if explicitly approved.'
+  };
 }
 
 function unwrapMessage(msg) {
@@ -520,7 +428,6 @@ async function initBaileysSocket(reason = 'Startup') {
 
       ensureDirectories();
       loadMappings();
-      recordMapping('88949594783992@lid', '966569589664');
 
       const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
 
@@ -598,13 +505,12 @@ async function initBaileysSocket(reason = 'Startup') {
           addLog('warn', `[Baileys] Connection closed. StatusCode: ${statusCode}`);
 
           if (statusCode === DisconnectReason.loggedOut) {
-            addLog('warn', '[Baileys] 401 Logged Out — purging session directory and restarting in 3s...');
-            clearSessionDirectory();
+            addLog('warn', '[Baileys] 401 Logged Out — preserving session files and requiring explicit re-pairing approval.');
             connectedPhone = null;
             botName = null;
             qrCodeDataUrl = null;
             qrCodeData = null;
-            scheduleReconnect(3000, '401 LoggedOut');
+            cancelReconnectTimer();
           } else if (statusCode === 515) {
             addLog('warn', '[Baileys] 515 Restart Required — reconnecting without purge in 2.5s...');
             scheduleReconnect(2500, '515 Restart Required');
@@ -834,11 +740,7 @@ async function handlePairingCode(req, res) {
   addLog('info', `[PairPhone] Requesting pairing code for: ${cleanPhone}...`);
 
   try {
-    clearSessionDirectory();
-    await initBaileysSocket('Pre-pairing session wipe');
-
-    await new Promise(resolve => setTimeout(resolve, 2500));
-
+    // Pair on the existing unregistered socket. Never erase an active auth store.
     if (!sock) {
       return res.status(500).json({ error: 'تعذر تهيئة مقبس الواتساب' });
     }
@@ -846,7 +748,7 @@ async function handlePairingCode(req, res) {
     const code = await sock.requestPairingCode(cleanPhone);
     pendingPairingCode = code;
 
-    addLog('info', `[PairPhone] ✅ Pairing Code generated: ${code} for ${cleanPhone}`);
+    addLog('info', `[PairPhone] Pairing Code generated for ${cleanPhone}`);
 
     res.json({
       status: 'ok',
@@ -917,10 +819,7 @@ async function handleSendMessage(req, res) {
       if (cached) {
         options.quoted = cached;
       } else {
-        options.quoted = {
-          key: { remoteJid: jid, id: quoted_message_id, fromMe: false },
-          message: { conversation: '' }
-        };
+        addLog('warn', `[Send] Missing original quoted message ${quoted_message_id}; sending without a fabricated quote.`);
       }
     }
 
@@ -973,8 +872,7 @@ app.post('/heal-sessions', async (req, res) => {
   }
 
   const result = await healTargetSession(target);
-  const httpCode = result.status === 'ok' ? 200 : (result.status === 'cooldown' ? 429 : 500);
-  res.status(httpCode).json(result);
+  res.status(409).json(result);
 });
 
 // POST /sync-contact-mapping (Dynamic LID <-> Phone mapping from Frappe)

@@ -1,4 +1,5 @@
 import express from 'express';
+import { canonicalJid, sameConversation, validRecipient, tokenMatches, messageCacheKey, webhookAccepted, retryKind, serviceDiagnostics } from './wa-safety.mjs';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
@@ -11,17 +12,29 @@ import {
   makeCacheableSignalKeyStore,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  jidDecode,
-  isJidGroup,
-  S_WHATSAPP_NET,
-  proto
+  proto,
+  BufferJSON
 } from '@whiskeysockets/baileys';
 
 const app = express();
-const logger = pino({ level: 'warn' });
+const logger = pino({ level: 'warn', redact: ['session', 'creds', 'keys'] }, {
+  write(line) {
+    try {
+      const event = JSON.parse(line);
+      const kind = retryKind([event.msg || '', event.err?.message || '']);
+      if (/decrypt|bad mac|no.*session|matching sessions/i.test(`${event.msg || ''} ${event.err?.message || ''}`)) {
+        metrics.decryptionErrors++;
+        if (event.key?.fromMe) metrics.selfDecryptionErrors++;
+      }
+      addLog(event.level >= 50 ? 'error' : 'warn', event.msg || 'Baileys transport event', event.err?.message || '',
+        event.key ? { message_id: event.key.id, remote_jid: event.key.remoteJid, from_me: event.key.fromMe } : '');
+    } catch (_) { addLog('warn', 'Unparseable Baileys log event'); }
+  }
+});
 
 const PORT = process.env.PORT || 3000;
-const API_TOKEN = process.env.WA_API_TOKEN || 'HAGAG_WA_7f3c9a2d6e4b8a1c';
+const API_TOKEN = process.env.WA_API_TOKEN || '';
+if (!API_TOKEN) throw new Error('WA_API_TOKEN must be provided through the environment');
 const SESSION_DIR = process.env.SESSION_DIR || '/app/session';
 const FRAPPE_WEBHOOK_URL = process.env.FRAPPE_WEBHOOK_URL || 'http://backend:8000/api/method/hagag_erp.whatsapp_bridge.receive_baileys_event';
 const FRAPPE_HOST = process.env.FRAPPE_HOST || 'erp.local';
@@ -44,6 +57,12 @@ let engineStartTime = Date.now();
 
 // ─── Telemetry & Metrics ──────────────────────────────────────────────────────
 const metrics = {
+  errors: 0,
+  decryptionErrors: 0,
+  selfDecryptionErrors: 0,
+  absentMessages: 0,
+  lastInbound: null,
+  lastOutbound: null,
   messagesReceived: 0,
   messagesSent: 0,
   webhookSuccess: 0,
@@ -58,7 +77,16 @@ const logBuffer = [];
 const MAX_LOG_ENTRIES = 200;
 
 function addLog(level, ...args) {
-  const msg = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+  const safeObject = value => {
+    if (value instanceof Error) return { name: value.name, message: value.message };
+    return Object.fromEntries(['message_id', 'remote_jid', 'from_me', 'status', 'code']
+      .filter(key => value && value[key] !== undefined).map(key => [key, value[key]]));
+  };
+  // libsignal sometimes logs entire SessionEntry objects through console.warn.
+  // Keep only diagnostic metadata, never key material or authentication state.
+  let msg = args.map(a => (typeof a === 'object' ? JSON.stringify(safeObject(a)) : String(a))).join(' ');
+  if (API_TOKEN) msg = msg.split(API_TOKEN).join('[redacted]');
+  if (level === 'error') metrics.errors++;
   const entry = { ts: new Date().toISOString(), level: level.toLowerCase(), msg };
   logBuffer.push(entry);
   if (logBuffer.length > MAX_LOG_ENTRIES) logBuffer.shift();
@@ -76,7 +104,6 @@ console.error = (...a) => addLog('error', ...a);
 
 // ─── Mutexes & Socket Singleton Manager ───────────────────────────────────────
 const initMutex = new Mutex();
-const resetMutex = new Mutex();
 let reconnectTimer = null;
 
 let sock = null;
@@ -90,17 +117,18 @@ let pendingPairingCode = null;
 // Caches & Durable Stores
 const msgRetryCounterCache = new NodeCache({ stdTTL: 600, checkperiod: 120 });
 const messageStore = new NodeCache({ stdTTL: 3600, checkperiod: 600 });
+const messageIdStore = new NodeCache({ stdTTL: 3600, checkperiod: 600 });
 const dedupCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
-const signalCache = new NodeCache({ stdTTL: 300, useClones: false, deleteOnExpire: true });
+let credentialWrites = Promise.resolve();
+let authRegistered = false;
+let ownLid = '';
+const keyWrites = new Set();
+let shuttingDown = false;
 const pendingRetries = new Map(); // msgId -> { remoteJid, timestamp }
 
 const MESSAGE_CACHE_DIR = path.join(SESSION_DIR, 'message_cache');
+const MESSAGE_ID_INDEX_DIR = path.join(SESSION_DIR, 'message_id_index');
 const MAPPINGS_FILE = path.join(SESSION_DIR, 'contact_mappings.json');
-
-// Session healing cooldown tracker: JID -> { count, lastAttempt }
-const healCooldownMap = new Map();
-const MAX_HEAL_ATTEMPTS = 3;
-const HEAL_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
 // Bidirectional Dynamic LID <-> Phone Number mapping
 const lidPnMap = new Map(); // LID -> Phone
@@ -109,7 +137,18 @@ const pnLidMap = new Map(); // Phone -> LID
 function ensureDirectories() {
   try {
     if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
-    if (!fs.existsSync(MESSAGE_CACHE_DIR)) fs.mkdirSync(MESSAGE_CACHE_DIR, { recursive: true });
+    if (!fs.existsSync(MESSAGE_CACHE_DIR)) {
+      fs.mkdirSync(MESSAGE_CACHE_DIR, { recursive: true });
+    } else {
+      for (const file of fs.readdirSync(MESSAGE_CACHE_DIR)) {
+        if (file.startsWith('id_') && file.endsWith('.json')) {
+          try { fs.unlinkSync(path.join(MESSAGE_CACHE_DIR, file)); } catch (_) {}
+        }
+      }
+    }
+    if (!fs.existsSync(MESSAGE_ID_INDEX_DIR)) {
+      fs.mkdirSync(MESSAGE_ID_INDEX_DIR, { recursive: true, mode: 0o700 });
+    }
   } catch (err) {
     addLog('warn', `[Init] Error ensuring directories: ${err.message}`);
   }
@@ -128,6 +167,9 @@ function loadMappings() {
         }
         addLog('info', `[MappingStore] Loaded ${lidPnMap.size} LID->PN mappings and ${pnLidMap.size} PN->LID mappings from disk`);
       }
+    }
+    if (process.env.WA_DEFAULT_LID && process.env.WA_DEFAULT_PHONE) {
+      recordMapping(process.env.WA_DEFAULT_LID, process.env.WA_DEFAULT_PHONE);
     }
   } catch (err) {
     addLog('warn', `[MappingStore] Error loading contact mappings: ${err.message}`);
@@ -154,7 +196,8 @@ function recordMapping(lidOrJid, phoneNumber) {
   const cleanPn = normalizeNumber(phoneNumber);
   if (!cleanPn) return;
 
-  const raw = String(lidOrJid).trim();
+  const raw = canonicalJid(lidOrJid);
+  if (!/^\d+@lid$/.test(raw) || !/^\d{9,15}$/.test(cleanPn)) return;
   const cleanLid = raw.replace('@lid', '').split(':')[0];
   const lidJid = `${cleanLid}@lid`;
 
@@ -167,34 +210,208 @@ function recordMapping(lidOrJid, phoneNumber) {
   saveMappings();
 }
 
-function storeMessage(msgId, msgObj) {
-  if (!msgId || !msgObj) return;
-  messageStore.set(msgId, msgObj);
-  try {
-    ensureDirectories();
-    const filePath = path.join(MESSAGE_CACHE_DIR, `${msgId}.json`);
-    fs.writeFileSync(filePath, JSON.stringify(msgObj), 'utf8');
-  } catch (err) {
-    // Non-fatal cache failure
-  }
+function atomicJson(file, value) {
+  const temp = `${file}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(value, BufferJSON.replacer), { mode: 0o600 });
+  fs.renameSync(temp, file);
 }
 
-function fetchStoredMessage(msgId) {
-  if (!msgId) return null;
-  const inMem = messageStore.get(msgId);
-  if (inMem) return inMem;
+function storeMessage(msgId, msgObj) {
+  const cacheKey = messageCacheKey(msgObj?.key);
+  if (!msgId || !cacheKey || !msgObj.message) return;
+  messageStore.set(cacheKey, msgObj);
+  messageIdStore.set(msgId, msgObj);
+  ensureDirectories();
+  atomicJson(path.join(MESSAGE_CACHE_DIR, `${cacheKey}.json`), msgObj);
   try {
-    const filePath = path.join(MESSAGE_CACHE_DIR, `${msgId}.json`);
-    if (fs.existsSync(filePath)) {
-      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-      messageStore.set(msgId, data);
-      return data;
-    }
-  } catch (err) {
-    // Non-fatal cache read failure
+    const safeMsgId = encodeURIComponent(msgId);
+    if (!fs.existsSync(MESSAGE_ID_INDEX_DIR)) fs.mkdirSync(MESSAGE_ID_INDEX_DIR, { recursive: true, mode: 0o700 });
+    atomicJson(path.join(MESSAGE_ID_INDEX_DIR, `${safeMsgId}.json`), { cacheKey });
+  } catch (_) {}
+}
+
+function fetchStoredMessage(key) {
+  const cacheKey = messageCacheKey(key);
+  if (!cacheKey) return null;
+  const cached = messageStore.get(cacheKey);
+  if (cached) return cached;
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(MESSAGE_CACHE_DIR, `${cacheKey}.json`), 'utf8'), BufferJSON.reviver);
+    messageStore.set(cacheKey, value);
+    return value;
+  } catch (_) { return null; }
+}
+
+function isOwnJid(jid) {
+  if (!jid) return false;
+  const canonical = canonicalJid(jid);
+  const user = canonical.split('@')[0];
+  const myPn = (connectedPhone || '').split('@')[0];
+  const myLid = (ownLid || '').split('@')[0];
+  if (myPn && (canonical === `${myPn}@s.whatsapp.net` || user === myPn)) return true;
+  if (myLid && (canonical === `${myLid}@lid` || user === myLid)) return true;
+  return false;
+}
+
+function isRetryAllowed(candidate, requestedKey, mapping = lidPnMap) {
+  if (!candidate?.key?.id || !requestedKey?.id || candidate.key.id !== requestedKey.id) return false;
+  const reqJid = canonicalJid(requestedKey.remoteJid);
+  const reqPart = canonicalJid(requestedKey.participant || '');
+  const candJid = canonicalJid(candidate.key.remoteJid);
+
+  // 1. Peer retry: request is from the same conversation (either remoteJid or participant matches candidate conversation)
+  if (sameConversation(reqJid, candJid, mapping)) return true;
+  if (reqPart && sameConversation(reqPart, candJid, mapping)) return true;
+
+  // 2. Self-sync retry: outgoing message retried by the bot's own companion or primary device
+  if (candidate.key.fromMe && (isOwnJid(reqJid) || isOwnJid(reqPart))) return true;
+
+  return false;
+}
+
+function findCandidateMessage(key) {
+  if (!key?.id) return null;
+  // 1. In-memory hot lookup
+  const inMem = messageIdStore.get(key.id);
+  if (inMem?.message && isRetryAllowed(inMem, key, lidPnMap)) {
+    return inMem;
   }
+  // 2. Direct O(1) indexed disk lookup
+  try {
+    const safeMsgId = encodeURIComponent(key.id);
+    const indexPath = path.join(MESSAGE_ID_INDEX_DIR, `${safeMsgId}.json`);
+    if (fs.existsSync(indexPath)) {
+      const idx = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+      if (idx?.cacheKey) {
+        const fullPath = path.join(MESSAGE_CACHE_DIR, `${idx.cacheKey}.json`);
+        if (fs.existsSync(fullPath)) {
+          const data = JSON.parse(fs.readFileSync(fullPath, 'utf8'), BufferJSON.reviver);
+          if (data?.key?.id === key.id && data.message && isRetryAllowed(data, key, lidPnMap)) {
+            messageIdStore.set(key.id, data);
+            return data;
+          }
+        }
+      }
+    }
+  } catch (_) {}
+  // 3. Fallback scan for legacy or unindexed cache files
+  try {
+    if (fs.existsSync(MESSAGE_CACHE_DIR)) {
+      for (const file of fs.readdirSync(MESSAGE_CACHE_DIR)) {
+        if (!file.endsWith('.json')) continue;
+        try {
+          const filePath = path.join(MESSAGE_CACHE_DIR, file);
+          const raw = fs.readFileSync(filePath, 'utf8');
+          if (raw.includes(key.id)) {
+            const data = JSON.parse(raw, BufferJSON.reviver);
+            if (data?.key?.id === key.id && data.message && isRetryAllowed(data, key, lidPnMap)) {
+              messageIdStore.set(key.id, data);
+              return data;
+            }
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
   return null;
 }
+
+async function fetchRetryMessage(key, socket) {
+  if (!key?.id || !key?.remoteJid) return null;
+  const reqJid = canonicalJid(key.remoteJid);
+  if (!reqJid) return null;
+
+  // Build list of verified candidate remoteJids belonging to the exact same conversation
+  const conversationJids = [reqJid];
+  let alternate = reqJid.endsWith('@lid') ? (lidPnMap.get(reqJid) || lidPnMap.get(reqJid.split('@')[0])) : (pnLidMap.get(reqJid) || pnLidMap.get(reqJid.split('@')[0]));
+  if (alternate && !alternate.includes('@')) {
+    alternate = reqJid.endsWith('@lid') ? `${alternate}@s.whatsapp.net` : `${alternate}@lid`;
+  }
+  if (!alternate && socket?.signalRepository?.lidMapping) {
+    try {
+      const mapping = socket.signalRepository.lidMapping;
+      const res = reqJid.endsWith('@lid') ? await mapping.getPNForLID(reqJid) : await mapping.getLIDForPN(reqJid);
+      if (res) {
+        if (reqJid.endsWith('@lid')) {
+          recordMapping(reqJid, res);
+          alternate = res.includes('@') ? res : `${res}@s.whatsapp.net`;
+        } else {
+          recordMapping(res, reqJid);
+          alternate = res.includes('@') ? res : `${res}@lid`;
+        }
+      }
+    } catch (_) {}
+  }
+  if (alternate) {
+    conversationJids.push(canonicalJid(alternate));
+  }
+
+  // Check valid conversation variants across fromMe and participant dimensions
+  for (const cJid of conversationJids) {
+    const variants = [
+      { id: key.id, remoteJid: cJid, fromMe: key.fromMe, participant: key.participant },
+      { id: key.id, remoteJid: cJid, fromMe: !key.fromMe, participant: undefined },
+      { id: key.id, remoteJid: cJid, fromMe: key.fromMe, participant: undefined },
+      { id: key.id, remoteJid: cJid, fromMe: !key.fromMe, participant: key.participant }
+    ];
+    for (const v of variants) {
+      const match = fetchStoredMessage(v);
+      if (match?.message) {
+        // Enforce strict conversation matching: candidate message must belong to the requested conversation
+        if (isRetryAllowed(match, key, lidPnMap)) {
+          return match;
+        }
+      }
+    }
+  }
+
+  // Fallback: candidate lookup guarded strictly by isRetryAllowed
+  const candidate = findCandidateMessage(key);
+  if (candidate?.message) {
+    return candidate;
+  }
+
+  return null;
+}
+
+const OUTBOX_DIR = path.join(SESSION_DIR, 'webhook_outbox');
+let drainingOutbox = false;
+async function drainWebhookOutbox() {
+  if (drainingOutbox || !API_TOKEN || !fs.existsSync(OUTBOX_DIR)) return;
+  drainingOutbox = true;
+  try {
+    for (const file of fs.readdirSync(OUTBOX_DIR).filter(f => f.endsWith('.json')).slice(0, 100)) {
+      const filePath = path.join(OUTBOX_DIR, file);
+      try {
+        const payload = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        const resp = await fetch(FRAPPE_WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Host': FRAPPE_HOST,
+            'X-Frappe-Site-Name': FRAPPE_HOST, 'X-Api-Token': API_TOKEN },
+          body: JSON.stringify(payload), signal: AbortSignal.timeout(15000)
+        });
+        const body = await resp.json();
+        if (!webhookAccepted(resp.ok, body)) throw new Error(`Webhook not accepted (HTTP ${resp.status})`);
+        fs.unlinkSync(filePath);
+        metrics.webhookSuccess++;
+      } catch (err) {
+        metrics.webhookFailed++;
+        addLog('error', '[Webhook] Retained event for retry:', err.message);
+        break;
+      }
+    }
+  } finally { drainingOutbox = false; }
+}
+
+function queueWebhook(payload) {
+  fs.mkdirSync(OUTBOX_DIR, { recursive: true, mode: 0o700 });
+  const key = messageCacheKey({ id: `${payload.event_type}:${payload.message_id}:${payload.status_code ?? ''}`,
+    remoteJid: payload.remote_jid, fromMe: payload.event_type === 'status_update' });
+  if (!key) throw new Error('Webhook identity missing');
+  atomicJson(path.join(OUTBOX_DIR, `${key}.json`), payload);
+  void drainWebhookOutbox();
+}
+setInterval(() => { void drainWebhookOutbox(); }, 5000).unref();
 
 function cleanOldMessageCache() {
   try {
@@ -218,7 +435,7 @@ setInterval(cleanOldMessageCache, 6 * 60 * 60 * 1000);
 // ─── Utility Functions ────────────────────────────────────────────────────────
 function normalizeNumber(number) {
   if (!number) return '';
-  let n = String(number).replace(/\D/g, '');
+  let n = String(number).replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))).replace(/\D/g, '');
 
   if (n.startsWith('00')) {
     n = n.substring(2);
@@ -243,8 +460,7 @@ function normalizeNumber(number) {
 function authorized(req) {
   const auth = req.headers.authorization || '';
   const headerToken = req.headers['x-api-token'] || '';
-  const queryToken = req.query.token || '';
-  return auth === `Bearer ${API_TOKEN}` || headerToken === API_TOKEN || queryToken === API_TOKEN;
+  return tokenMatches(API_TOKEN, auth.startsWith('Bearer ') ? auth.slice(7) : headerToken);
 }
 
 function cancelReconnectTimer() {
@@ -259,8 +475,8 @@ async function closeExistingSocket(reason = 'Close request') {
   if (sock) {
     try {
       addLog('info', `[SocketManager] Closing existing socket: ${reason}`);
-      sock.ev.removeAllListeners();
       sock.end(new Error(reason));
+      sock.ev.removeAllListeners();
       if (sock.ws) {
         sock.ws.close();
       }
@@ -269,127 +485,6 @@ async function closeExistingSocket(reason = 'Close request') {
     } finally {
       sock = null;
     }
-  }
-}
-
-function clearSessionDirectory() {
-  try {
-    if (fs.existsSync(SESSION_DIR)) {
-      const files = fs.readdirSync(SESSION_DIR);
-      for (const file of files) {
-        try {
-          fs.rmSync(path.join(SESSION_DIR, file), { recursive: true, force: true });
-        } catch (e) {
-          addLog('error', `Failed to delete session file ${file}:`, e.message);
-        }
-      }
-      addLog('info', '[Baileys] Entire session directory purged.');
-    }
-  } catch (err) {
-    addLog('error', 'Error purging session directory:', err.message);
-  }
-}
-
-// ─── Targeted Session Healing (Bad MAC / Decrypt Error Recovery) ───────────────
-async function healTargetSession(targetId) {
-  if (!targetId) return { status: 'error', message: 'Target ID / JID is required' };
-
-  // Check cooldown
-  const now = Date.now();
-  const history = healCooldownMap.get(targetId) || { count: 0, lastAttempt: 0 };
-  if (history.count >= MAX_HEAL_ATTEMPTS && (now - history.lastAttempt) < HEAL_COOLDOWN_MS) {
-    const waitSec = Math.ceil((HEAL_COOLDOWN_MS - (now - history.lastAttempt)) / 1000);
-    addLog('warn', `[SessionHeal] Cooldown active for ${targetId}. Try again in ${waitSec}s.`);
-    return { status: 'cooldown', message: `العملية في فترة التهدئة لهذا المعرف. انتظر ${waitSec} ثانية.` };
-  }
-
-  addLog('info', `[SessionHeal] Diagnosing and healing session for target: ${targetId}...`);
-  metrics.healOperations++;
-
-  // Normalize target identifier
-  const cleanId = String(targetId).trim();
-  const isLid = cleanId.includes('@lid');
-  const isGroup = cleanId.includes('@g.us');
-  let signalUser = cleanId.split('@')[0].split(':')[0];
-
-  // If provided as 251036744843464.0, strip device
-  const addrMatch = signalUser.match(/^(\d+)\.\d+$/);
-  if (addrMatch) {
-    signalUser = addrMatch[1];
-  }
-
-  let deletedCount = 0;
-  const deletedFiles = [];
-
-  try {
-    if (fs.existsSync(SESSION_DIR)) {
-      const files = fs.readdirSync(SESSION_DIR);
-      for (const file of files) {
-        // STRICT SAFETY: Never touch creds.json, core auth keys, or persistent mappings
-        if (file === 'creds.json' || file.startsWith('app-state-sync-key') || file === 'contact_mappings.json' || file === 'message_cache') {
-          continue;
-        }
-
-        let isMatch = false;
-        if (isGroup) {
-          // If group, clear sender keys for this group
-          if (file.startsWith(`sender-key-${signalUser}`) || file.startsWith(`sender-key-memory-${signalUser}`)) {
-            isMatch = true;
-          }
-        } else {
-          // Direct chat / LID / PN session file
-          if (file.startsWith(`session-${signalUser}`)) {
-            isMatch = true;
-          }
-        }
-
-        if (isMatch) {
-          try {
-            fs.unlinkSync(path.join(SESSION_DIR, file));
-            deletedCount++;
-            deletedFiles.push(file);
-            addLog('info', `[SessionHeal] Safely removed corrupted key file: ${file}`);
-          } catch (delErr) {
-            addLog('warn', `[SessionHeal] Could not delete ${file}: ${delErr.message}`);
-          }
-        }
-      }
-    }
-
-    // Flush in-memory signalCache for this user
-    try {
-      let flushedKeys = 0;
-      for (const k of signalCache.keys()) {
-        if (k.includes(signalUser)) {
-          signalCache.del(k);
-          flushedKeys++;
-        }
-      }
-      if (flushedKeys > 0) {
-        addLog('info', `[SessionHeal] Flushed ${flushedKeys} in-memory signal keys for ${signalUser}`);
-      }
-    } catch (cErr) {
-      addLog('warn', `[SessionHeal] Could not clear signalCache: ${cErr.message}`);
-    }
-
-    // Update cooldown
-    healCooldownMap.set(targetId, {
-      count: history.count + 1,
-      lastAttempt: now
-    });
-
-    return {
-      status: 'ok',
-      target: targetId,
-      deleted_files_count: deletedCount,
-      deleted_files: deletedFiles,
-      session_reasserted: false,
-      message: `تم تطهير ملفات وكاش الجلسة بأمان للمعرف (${targetId}). الملفات المعالجة: ${deletedCount}.`
-    };
-
-  } catch (err) {
-    addLog('error', `[SessionHeal] Error healing session for ${targetId}:`, err.message);
-    return { status: 'error', error: err.message };
   }
 }
 
@@ -422,7 +517,11 @@ async function dispatchMessageToFrappe(msg, m, text) {
     ? (msg.key.participant || msg.participant || '')
     : remoteJid;
 
-  let rawSenderPn = msg.key.senderPn || msg.key.participantPn || '';
+  let rawSenderPn = isGroup ? (msg.key.participantAlt || msg.key.participantPn || '') : (msg.key.remoteJidAlt || msg.key.senderPn || '');
+  if (String(rawSenderPn).includes('@') && !String(rawSenderPn).endsWith('@s.whatsapp.net')) rawSenderPn = '';
+  if (!rawSenderPn && senderJid.endsWith('@lid') && sock?.signalRepository?.lidMapping?.getPNForLID) {
+    rawSenderPn = await sock.signalRepository.lidMapping.getPNForLID(canonicalJid(senderJid)) || '';
+  }
   const signalUser = senderJid.split('@')[0].split(':')[0];
 
   if (rawSenderPn) {
@@ -463,7 +562,8 @@ async function dispatchMessageToFrappe(msg, m, text) {
       reply_jid: replyJid,
       is_group: isGroup,
       text: text,
-      timestamp: msg.messageTimestamp,
+      timestamp: Number(msg.messageTimestamp) || Math.floor(Date.now() / 1000),
+      mentioned_jids: m?.extendedTextMessage?.contextInfo?.mentionedJid || [],
       has_media: !!(
         m?.imageMessage ||
         m?.videoMessage ||
@@ -474,27 +574,13 @@ async function dispatchMessageToFrappe(msg, m, text) {
       push_name: msg.pushName || ''
     };
 
-    const resp = await fetch(FRAPPE_WEBHOOK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Host': FRAPPE_HOST,
-        'X-Frappe-Site-Name': FRAPPE_HOST,
-        'X-Api-Token': API_TOKEN
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15000)
-    });
+    queueWebhook(payload);
+    metrics.lastInbound = new Date().toISOString();
 
-    if (resp.ok) {
-      metrics.webhookSuccess++;
-    } else {
-      metrics.webhookFailed++;
-      addLog('warn', `[Webhook] Frappe returned HTTP ${resp.status} for msg ${msgId}`);
-    }
   } catch (fetchErr) {
     metrics.webhookFailed++;
-    addLog('error', '[Webhook] Failed to forward message to Frappe:', fetchErr.message);
+    addLog('error', '[Webhook] Failed to persist message:', fetchErr.message);
+    throw fetchErr;
   }
 }
 
@@ -520,9 +606,33 @@ async function initBaileysSocket(reason = 'Startup') {
 
       ensureDirectories();
       loadMappings();
-      recordMapping('88949594783992@lid', '966569589664');
 
+      await credentialWrites;
+      await Promise.all([...keyWrites]);
+      const credentialsPath = path.join(SESSION_DIR, 'creds.json');
+      if (fs.existsSync(credentialsPath)) {
+        let existingCredentials;
+        try { existingCredentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'), BufferJSON.reviver); }
+        catch { throw new Error('Existing authentication file is unreadable; replacement and pairing are blocked'); }
+        if (!existingCredentials?.noiseKey?.private || !existingCredentials?.signedIdentityKey?.private) {
+          throw new Error('Existing authentication file is incomplete; replacement and pairing are blocked');
+        }
+      }
       const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+      const persistKeys = state.keys.set.bind(state.keys);
+      state.keys.set = data => {
+        const pending = persistKeys(data);
+        keyWrites.add(pending);
+        pending.then(() => keyWrites.delete(pending), err => {
+          keyWrites.delete(pending);
+          currentState = EngineState.ERROR;
+          addLog('error', '[Auth] Signal key persistence failed:', err.message);
+        });
+        return pending;
+      };
+      authRegistered = Boolean(state.creds.registered || state.creds.me?.id);
+      ownLid = canonicalJid(state.creds.me?.lid || '');
+      const signalCache = new NodeCache({ stdTTL: 300, useClones: false });
 
       let version = [2, 3000, 1015901307];
       try {
@@ -546,12 +656,19 @@ async function initBaileysSocket(reason = 'Startup') {
         syncFullHistory: false,
         shouldSyncHistoryMessage: () => false,
         markOnlineOnConnect: false,
+        // The installed 6.7.24 API applies this before attempting to decrypt ignored channels.
+        shouldIgnoreJid: jid => typeof jid === 'string' && (jid === 'status@broadcast' || jid.endsWith('@broadcast') || jid.endsWith('@newsletter')),
         generateHighQualityLinkPreview: false,
         logger,
         printQRInTerminal: false,
         getMessage: async (key) => {
           if (!key?.id) return undefined;
-          const cached = fetchStoredMessage(key.id);
+          const cached = await fetchRetryMessage(key, sock);
+          const msg = cached?.message || cached;
+          if (msg && (msg.conversation || msg.extendedTextMessage || msg.imageMessage || msg.documentMessage || msg.videoMessage || msg.audioMessage)) {
+            addLog('info', `[GetMessage] Serving stored message ${key.id} for retry to ${key.remoteJid}`);
+            return msg;
+          }
           if (cached?.message) {
             addLog('info', `[GetMessage] Serving stored message ${key.id} for retry to ${key.remoteJid}`);
             return cached.message;
@@ -561,10 +678,27 @@ async function initBaileysSocket(reason = 'Startup') {
         }
       });
 
-      sock.ev.on('creds.update', saveCreds);
+      const activeSocket = sock;
+      sock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => recordMapping(lid, jid));
+      sock.ev.on('contacts.upsert', contacts => {
+        for (const contact of contacts || []) {
+          if (contact.lid && contact.id?.endsWith('@s.whatsapp.net')) recordMapping(contact.lid, contact.id);
+        }
+      });
+      sock.ev.on('creds.update', () => {
+        credentialWrites = credentialWrites.then(saveCreds).catch(err => {
+          currentState = EngineState.ERROR;
+          addLog('error', '[Auth] Credential persistence failed:', err.message);
+          throw err;
+        });
+        // Observe rejection; the chain remains rejected to block unsafe recreation.
+        void credentialWrites.catch(() => {});
+        authRegistered = Boolean(state.creds.registered || state.creds.me?.id);
+      });
 
       // ── Connection Update ───────────────────────────────────────────────────
       sock.ev.on('connection.update', async (update) => {
+        if (sock !== activeSocket) return;
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
@@ -579,12 +713,14 @@ async function initBaileysSocket(reason = 'Startup') {
 
         if (connection === 'open') {
           currentState = EngineState.CONNECTED;
+          authRegistered = true;
           qrCodeData = null;
           qrCodeDataUrl = null;
           pendingPairingCode = null;
 
           const userJid = sock.user?.id || '';
           connectedPhone = normalizeNumber(userJid.split('@')[0].split(':')[0]);
+          if (sock.user?.lid) ownLid = canonicalJid(sock.user.lid);
           botName = sock.user?.name || 'Elsaidy Bot';
 
           addLog('info', `[Baileys] ✅ WhatsApp Connected! Phone: ${connectedPhone}, Name: ${botName}`);
@@ -598,13 +734,15 @@ async function initBaileysSocket(reason = 'Startup') {
           addLog('warn', `[Baileys] Connection closed. StatusCode: ${statusCode}`);
 
           if (statusCode === DisconnectReason.loggedOut) {
-            addLog('warn', '[Baileys] 401 Logged Out — purging session directory and restarting in 3s...');
-            clearSessionDirectory();
+            addLog('warn', '[Baileys] 401 Logged Out — preserving session files and requiring explicit re-pairing approval.');
             connectedPhone = null;
             botName = null;
             qrCodeDataUrl = null;
             qrCodeData = null;
-            scheduleReconnect(3000, '401 LoggedOut');
+            cancelReconnectTimer();
+          } else if ([DisconnectReason.connectionReplaced, DisconnectReason.badSession].includes(statusCode)) {
+            addLog('error', '[Baileys] Terminal disconnect; preserved session for investigation');
+            cancelReconnectTimer();
           } else if (statusCode === 515) {
             addLog('warn', '[Baileys] 515 Restart Required — reconnecting without purge in 2.5s...');
             scheduleReconnect(2500, '515 Restart Required');
@@ -616,7 +754,9 @@ async function initBaileysSocket(reason = 'Startup') {
 
       // ── Messages Upsert ─────────────────────────────────────────────────────
       sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (sock !== activeSocket) return;
         for (const msg of (messages || [])) {
+          try {
           const msgId = msg.key?.id;
           const remoteJid = msg.key?.remoteJid || '';
           const fromMe = !!msg.key?.fromMe;
@@ -643,19 +783,25 @@ async function initBaileysSocket(reason = 'Startup') {
             const stubParams = msg.messageStubParameters;
             if (stubType === 2 || stubType === proto?.WebMessageInfo?.StubType?.CIPHERTEXT) {
               if (msgId) {
-                pendingRetries.set(msgId, { remoteJid, timestamp: Date.now() });
+                pendingRetries.set(messageCacheKey(msg.key), { remoteJid, timestamp: Date.now(), original: msg });
+                for (const [id, pending] of pendingRetries) {
+                  if (Date.now() - pending.timestamp > 600000 || pendingRetries.size > 1000) pendingRetries.delete(id);
+                }
               }
-              addLog('info', `[RetryPending] Message ${msgId} from ${remoteJid} absent from node — Baileys retry request initiated.`);
+              const kind = retryKind(stubParams);
+              if (kind === 'absent') metrics.absentMessages++; else metrics.decryptionErrors++;
+              addLog('warn', `[RetryPending] Message ${msgId} from ${remoteJid}: ${kind}; recovery not confirmed.`);
             } else {
               addLog('warn', `[MsgUndecrypted] Message ${msgId} from ${remoteJid} undecrypted | StubType: ${stubType} | Params: ${JSON.stringify(stubParams)}`);
             }
             continue;
           }
 
-          if (msgId && dedupCache.has(msgId)) {
+          const dedupKey = messageCacheKey(msg.key);
+          if (dedupKey && dedupCache.has(dedupKey)) {
             continue;
           }
-          if (msgId) dedupCache.set(msgId, true);
+
           metrics.messagesReceived++;
 
           storeMessage(msgId, msg);
@@ -663,70 +809,52 @@ async function initBaileysSocket(reason = 'Startup') {
           const m = unwrapMessage(msg);
           const text = extractMessageText(m);
 
-          if (!text) {
+          if (!text && !(m?.imageMessage || m?.videoMessage || m?.audioMessage || m?.documentMessage)) {
             addLog('debug', `[MsgNoText] Message ${msgId} has no text (type: ${Object.keys(m || {})[0]})`);
             continue;
           }
 
           await dispatchMessageToFrappe(msg, m, text);
+          if (dedupKey) dedupCache.set(dedupKey, true);
+          } catch (err) { addLog('error', '[Inbound] Processing failed:', err.message); }
         }
       });
 
       // ── Message Updates ─────────────────────────────────────────────────────
       sock.ev.on('messages.update', async (updates) => {
-        for (const update of updates) {
-          if (update.update?.status) {
-            const statusNames = { 1: 'PENDING', 2: 'SERVER_ACK', 3: 'DELIVERY_ACK', 4: 'READ', 5: 'PLAYED' };
-            const statusName = statusNames[update.update.status] || update.update.status;
-            addLog('info', `[MsgStatus] MsgID: ${update.key?.id} | To: ${update.key?.remoteJid} | Status: ${statusName} (${update.update.status})`);
-
-            // Forward delivery receipt status to Frappe webhook
-            try {
-              fetch(FRAPPE_WEBHOOK_URL, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Host': FRAPPE_HOST,
-                  'X-Frappe-Site-Name': FRAPPE_HOST,
-                  'X-Api-Token': API_TOKEN
-                },
-                body: JSON.stringify({
-                  event_type: 'status_update',
-                  message_id: update.key?.id,
-                  remote_jid: update.key?.remoteJid,
-                  status_code: update.update.status,
-                  status_name: statusName
-                }),
-                signal: AbortSignal.timeout(5000)
-              }).catch(() => {});
-            } catch (_) {}
-          }
-
-          if (update.key?.id && update.update?.message) {
-            const msgId = update.key.id;
-            const fullMsg = { key: update.key, message: update.update.message };
-            storeMessage(msgId, fullMsg);
-
-            // If this message was pending retry resolution from a previously absent node
-            if (pendingRetries.has(msgId) || !dedupCache.has(msgId)) {
-              pendingRetries.delete(msgId);
-              const m = unwrapMessage(fullMsg);
-              const text = extractMessageText(m);
-              if (text && !dedupCache.has(msgId)) {
-                dedupCache.set(msgId, true);
-                metrics.messagesReceived++;
-                addLog('info', `[RetryResolved] Successfully decrypted pending message ${msgId} after retry! Forwarding to Frappe...`);
-                await dispatchMessageToFrappe(fullMsg, m, text);
-              }
+        if (sock !== activeSocket) return;
+        for (const update of updates || []) {
+          try {
+            if (update.key?.fromMe && update.update?.status != null) {
+              queueWebhook({ event_type: 'status_update', message_id: update.key.id,
+                remote_jid: update.key.remoteJid, status_code: update.update.status });
             }
-          }
+            if (update.key?.id && update.update?.message && !update.key.fromMe) {
+              // Only retry previously observed inbound messages; unknown updates may be history/self sync.
+              const dedupKey = messageCacheKey(update.key);
+              if (!pendingRetries.has(dedupKey)) continue;
+              const fullMsg = { ...pendingRetries.get(dedupKey).original, key: update.key, message: update.update.message };
+              if (dedupCache.has(dedupKey)) continue;
+              storeMessage(update.key.id, fullMsg);
+              const m = unwrapMessage(fullMsg);
+              await dispatchMessageToFrappe(fullMsg, m, extractMessageText(m));
+              dedupCache.set(dedupKey, true);
+              pendingRetries.delete(dedupKey);
+            }
+          } catch (err) { addLog('error', '[MessageUpdate]', err.message); }
         }
       });
 
-      sock.ev.on('message-receipt.update', (receipts) => {
-        for (const r of (receipts || [])) {
-          const isRead = !!r.receipt?.readTimestamp;
-          addLog('info', `[Receipt] MsgID: ${r.key?.id} | From: ${r.receipt?.userJid || r.key?.remoteJid} | ${isRead ? 'READ' : 'DELIVERED'}`);
+      sock.ev.on('message-receipt.update', receipts => {
+        if (sock !== activeSocket) return;
+        for (const r of receipts || []) {
+          if (!r.key?.fromMe) continue;
+          const status = r.receipt?.readTimestamp ? 4 : r.receipt?.receiptTimestamp ? 3 : null;
+          if (status != null) {
+            try { queueWebhook({ event_type: 'status_update', message_id: r.key.id,
+              remote_jid: r.key.remoteJid, status_code: status }); }
+            catch (err) { addLog('error', '[Receipt]', err.message); }
+          }
         }
       });
 
@@ -741,6 +869,7 @@ async function initBaileysSocket(reason = 'Startup') {
 }
 
 function scheduleReconnect(delayMs, reason) {
+  if (shuttingDown) return;
   cancelReconnectTimer();
   metrics.reconnections++;
   addLog('warn', `[SocketManager] Scheduling reconnect in ${delayMs}ms (Reason: ${reason})...`);
@@ -753,6 +882,7 @@ function scheduleReconnect(delayMs, reason) {
 
 // GET /health
 app.get('/health', (req, res) => {
+  if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
   const uptimeSec = Math.floor((Date.now() - engineStartTime) / 1000);
   const memUsage = process.memoryUsage();
   res.json({
@@ -770,6 +900,16 @@ app.get('/health', (req, res) => {
       heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024)
     },
     metrics: {
+      errors: metrics.errors,
+      decryption_errors: metrics.decryptionErrors,
+      self_decryption_errors: metrics.selfDecryptionErrors,
+      absent_messages: metrics.absentMessages,
+      pending_retries: pendingRetries.size,
+      webhook_success: metrics.webhookSuccess,
+      webhook_failed: metrics.webhookFailed,
+      webhook_pending: fs.existsSync(OUTBOX_DIR) ? fs.readdirSync(OUTBOX_DIR).filter(f => f.endsWith('.json')).length : 0,
+      last_inbound: metrics.lastInbound,
+      last_outbound: metrics.lastOutbound,
       messages_received: metrics.messagesReceived,
       messages_sent: metrics.messagesSent,
       heal_operations: metrics.healOperations,
@@ -792,6 +932,13 @@ app.get('/status', (req, res) => {
     last_disconnect_reason: lastDisconnectReason,
     uptime_seconds: Math.floor((Date.now() - engineStartTime) / 1000)
   });
+});
+
+app.get('/diagnostics', (req, res) => {
+  if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
+  res.json({ status: 'ok', ...serviceDiagnostics(SESSION_DIR),
+    engine_state: currentState, pending_retries: pendingRetries.size,
+    auth_registered: authRegistered, destructive_actions_enabled: false });
 });
 
 // GET /qr
@@ -834,11 +981,8 @@ async function handlePairingCode(req, res) {
   addLog('info', `[PairPhone] Requesting pairing code for: ${cleanPhone}...`);
 
   try {
-    clearSessionDirectory();
-    await initBaileysSocket('Pre-pairing session wipe');
-
-    await new Promise(resolve => setTimeout(resolve, 2500));
-
+    // Pair on the existing unregistered socket. Never erase an active auth store.
+    if (authRegistered) return res.status(409).json({ error: 'Registered session preserved; pairing is blocked' });
     if (!sock) {
       return res.status(500).json({ error: 'تعذر تهيئة مقبس الواتساب' });
     }
@@ -846,7 +990,7 @@ async function handlePairingCode(req, res) {
     const code = await sock.requestPairingCode(cleanPhone);
     pendingPairingCode = code;
 
-    addLog('info', `[PairPhone] ✅ Pairing Code generated: ${code} for ${cleanPhone}`);
+    addLog('info', `[PairPhone] Pairing Code generated for ${cleanPhone}`);
 
     res.json({
       status: 'ok',
@@ -886,41 +1030,25 @@ async function handleSendMessage(req, res) {
     // Ensure valid domain if digits only
     if (!jid.includes('@')) {
       const clean = normalizeNumber(jid);
-      jid = clean.length > 13 ? `${clean}@lid` : `${clean}@s.whatsapp.net`;
+      jid = `${clean}@s.whatsapp.net`;
     }
 
-    // Dynamic Outbound Identity Resolution (Auto-route PN -> verified Cloud LID to avoid ratchet mismatch)
-    if (jid.endsWith('@s.whatsapp.net')) {
-      const cleanPn = normalizeNumber(jid.split('@')[0]);
-      if (pnLidMap.has(cleanPn)) {
-        const mappedLid = pnLidMap.get(cleanPn);
-        addLog('info', `[SendRouting] Auto-routed recipient PN ${cleanPn} -> verified Cloud LID ${mappedLid}`);
-        jid = mappedLid;
-      }
+    jid = canonicalJid(jid);
+    if (!validRecipient(jid)) return res.status(400).json({ error: 'Invalid recipient JID' });
+    if (sameConversation(jid, `${connectedPhone}@s.whatsapp.net`, lidPnMap) || (ownLid && jid === ownLid)) {
+      return res.status(400).json({ error: 'Sending to the bot itself is blocked' });
     }
-
-    // Guard 1: Never send to newsletter or broadcast
-    if (jid.includes('@newsletter') || jid.includes('@broadcast') || jid === 'status@broadcast') {
-      addLog('warn', `[SendBlocked] Blocked sending to newsletter/broadcast: ${jid}`);
-      return res.status(400).json({ error: 'غير مسموح بالإرسال إلى قنوات البث أو النشرات الإخبارية' });
-    }
-
-    // Guard 2: Never send to bot's own number
-    if (connectedPhone && (jid.startsWith(connectedPhone) || jid === `${connectedPhone}@s.whatsapp.net`)) {
-      addLog('warn', `[SendBlocked] Blocked sending to bot own number: ${jid}`);
-      return res.status(400).json({ error: 'غير مسموح بإرسال الرسالة إلى رقم البوت نفسه' });
-    }
+    // Baileys 6.x has no repository LID mapping API: use only dynamically learned exact mappings.
+    if (jid.endsWith('@s.whatsapp.net') && pnLidMap.has(jid)) jid = pnLidMap.get(jid);
+    if (ownLid && jid === ownLid) return res.status(400).json({ error: 'Sending to the bot itself is blocked' });
 
     let options = {};
     if (quoted_message_id) {
-      const cached = fetchStoredMessage(quoted_message_id);
+      const cached = fetchStoredMessage({ id: quoted_message_id, remoteJid: jid, fromMe: false });
       if (cached) {
         options.quoted = cached;
       } else {
-        options.quoted = {
-          key: { remoteJid: jid, id: quoted_message_id, fromMe: false },
-          message: { conversation: '' }
-        };
+        addLog('warn', `[Send] Missing original quoted message ${quoted_message_id}; sending without a fabricated quote.`);
       }
     }
 
@@ -938,8 +1066,10 @@ async function handleSendMessage(req, res) {
       sentMsg = await sock.sendMessage(jid, { text: message }, options);
     }
 
-    metrics.messagesSent++;
     const sentMsgId = sentMsg?.key?.id;
+    if (!sentMsgId) throw new Error('Baileys did not return a message ID');
+    metrics.messagesSent++;
+    metrics.lastOutbound = new Date().toISOString();
     if (sentMsgId) {
       storeMessage(sentMsgId, sentMsg);
     }
@@ -962,20 +1092,6 @@ async function handleSendMessage(req, res) {
 
 app.post('/send', handleSendMessage);
 app.post('/send-message', handleSendMessage);
-
-// POST /heal-sessions (Self-Healing Bad MAC without full wipe)
-app.post('/heal-sessions', async (req, res) => {
-  if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
-
-  const { target } = req.body;
-  if (!target) {
-    return res.status(400).json({ error: 'معرف الهدف (target / JID / Phone) مطلوب لإجراء الإصلاح الموجه' });
-  }
-
-  const result = await healTargetSession(target);
-  const httpCode = result.status === 'ok' ? 200 : (result.status === 'cooldown' ? 429 : 500);
-  res.status(httpCode).json(result);
-});
 
 // POST /sync-contact-mapping (Dynamic LID <-> Phone mapping from Frappe)
 app.post('/sync-contact-mapping', (req, res) => {
@@ -1024,7 +1140,7 @@ app.get('/groups', async (req, res) => {
 app.get('/logs', (req, res) => {
   if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-  const limit = Math.min(parseInt(req.query.limit || '100', 10), MAX_LOG_ENTRIES);
+  const limit = Math.max(1, Math.min(parseInt(req.query.limit || '100', 10) || 100, MAX_LOG_ENTRIES));
   const levelFilter = (req.query.level || '').toLowerCase().trim();
   const searchFilter = (req.query.search || '').toLowerCase().trim();
 
@@ -1049,6 +1165,7 @@ app.get('/logs', (req, res) => {
 app.post('/restart', async (req, res) => {
   if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
 
+  if (initMutex.isLocked() || currentState === EngineState.RESETTING) return res.status(409).json({ error: 'Restart already in progress' });
   addLog('info', '[Restart] Manual graceful restart initiated...');
   currentState = EngineState.RESETTING;
 
@@ -1059,66 +1176,37 @@ app.post('/restart', async (req, res) => {
   res.json({ status: 'ok', message: 'جاري إعادة تشغيل المقبس بأمان دون مسح الجلسة...' });
 });
 
-// POST /logout (Clean logout and session purge)
-app.post('/logout', async (req, res) => {
-  if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
-
-  addLog('warn', '[Logout] Manual logout requested...');
-  currentState = EngineState.RESETTING;
-
-  try {
-    if (sock) {
-      await sock.logout().catch(() => {});
-    }
-  } catch (e) {}
-
-  await closeExistingSocket('Manual logout');
-  clearSessionDirectory();
-
-  connectedPhone = null;
-  botName = null;
-  qrCodeDataUrl = null;
-  qrCodeData = null;
-  currentState = EngineState.STOPPED;
-
-  setTimeout(() => {
-    initBaileysSocket('Post-logout restart').catch(e => addLog('error', 'Init after logout error:', e.message));
-  }, 1000);
-
-  res.json({ status: 'ok', message: 'تم تسجيل الخروج بنجاح ومسح الجلسة.' });
-});
-
-// POST /wipe-session (Hard reset)
-app.post('/wipe-session', async (req, res) => {
-  if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
-
-  addLog('warn', '[WipeSession] Hard reset initiated...');
-  currentState = EngineState.RESETTING;
-
-  await closeExistingSocket('Hard reset');
-  clearSessionDirectory();
-
-  connectedPhone = null;
-  botName = null;
-  qrCodeDataUrl = null;
-  qrCodeData = null;
-  pendingPairingCode = null;
-
-  setTimeout(() => {
-    initBaileysSocket('Post-wipe restart').catch(e => addLog('error', 'Init after wipe error:', e.message));
-  }, 1000);
-
-  res.json({
-    status: 'ok',
-    message: 'تم تطهير مجلد الجلسة بالكامل وإعادة تهيئة المقبس بنجاح.'
+// Destructive session operations are deliberately unavailable in the production API.
+for (const endpoint of ['/logout', '/wipe-session', '/heal-sessions']) {
+  app.post(endpoint, (req, res) => {
+    if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
+    return res.status(409).json({ status: 'disabled', error: 'Session destruction is disabled. Use diagnostics.' });
   });
-});
+}
 
 // ─── Server Startup ───────────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
+const httpServer = app.listen(PORT, '0.0.0.0', () => {
   addLog('info', `[Baileys] 🚀 Server listening on port ${PORT} — Elsaidy WhatsApp Hub v3.2.0-Enterprise`);
 });
 
-initBaileysSocket('Initial startup').catch(err => {
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  cancelReconnectTimer();
+  try {
+    await closeExistingSocket('Service shutdown');
+    await credentialWrites;
+    await Promise.all([...keyWrites]);
+    httpServer.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 5000).unref();
+  } catch (err) {
+    addLog('error', '[Shutdown] Persistence error:', err.message);
+    process.exit(1);
+  }
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+if (API_TOKEN) initBaileysSocket('Initial startup').catch(err => {
   addLog('error', '[Baileys] Fatal initial startup error:', err.message);
 });

@@ -627,7 +627,7 @@ async function initBaileysSocket(reason = 'Startup') {
             const stubParams = msg.messageStubParameters;
             if (stubType === 2 || stubType === proto?.WebMessageInfo?.StubType?.CIPHERTEXT) {
               if (msgId) {
-                pendingRetries.set(msgId, { remoteJid, timestamp: Date.now(), original: msg });
+                pendingRetries.set(messageCacheKey(msg.key), { remoteJid, timestamp: Date.now(), original: msg });
                 for (const [id, pending] of pendingRetries) {
                   if (Date.now() - pending.timestamp > 600000 || pendingRetries.size > 1000) pendingRetries.delete(id);
                 }
@@ -675,15 +675,15 @@ async function initBaileysSocket(reason = 'Startup') {
             }
             if (update.key?.id && update.update?.message && !update.key.fromMe) {
               // Only retry previously observed inbound messages; unknown updates may be history/self sync.
-              if (!pendingRetries.has(update.key.id)) continue;
-              const fullMsg = { ...pendingRetries.get(update.key.id).original, key: update.key, message: update.update.message };
               const dedupKey = messageCacheKey(update.key);
+              if (!pendingRetries.has(dedupKey)) continue;
+              const fullMsg = { ...pendingRetries.get(dedupKey).original, key: update.key, message: update.update.message };
               if (dedupCache.has(dedupKey)) continue;
               storeMessage(update.key.id, fullMsg);
               const m = unwrapMessage(fullMsg);
               await dispatchMessageToFrappe(fullMsg, m, extractMessageText(m));
               dedupCache.set(dedupKey, true);
-              pendingRetries.delete(update.key.id);
+              pendingRetries.delete(dedupKey);
             }
           } catch (err) { addLog('error', '[MessageUpdate]', err.message); }
         }

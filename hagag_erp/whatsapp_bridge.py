@@ -1140,7 +1140,7 @@ def get_message_center_conversations(search: str = "", limit: int = 25, page: in
 
 	sql = f"""
 		SELECT
-			name, message_id, direction, sender_phone, receiver_phone, sender_name,
+			name, message_id, direction, sender_phone, receiver_phone, sender_name, receiver_jid,
 			is_group, group_jid, group_name, status, delivery_status, extracted_intent,
 			message_text, reply_text, creation,
 			COALESCE(NULLIF(conversation_id, ''), CASE
@@ -1166,7 +1166,13 @@ def get_message_center_conversations(search: str = "", limit: int = 25, page: in
 
 	for row in logs:
 		partner = row.conv_partner
+		if not row.is_group and row.direction == "Outgoing" and row.receiver_jid:
+			partner = conversation_identity(row.receiver_jid, hub)
+		elif not row.is_group and partner:
+			partner = conversation_identity(partner, hub)
 		if not partner or partner == 'Unknown':
+			continue
+		if hub and not row.is_group and partner == normalize_phone_number(hub.connected_phone or hub.bot_phone_number or ""):
 			continue
 		if partner not in conversations:
 			is_takeover = False
@@ -1237,15 +1243,15 @@ def get_conversation_thread(target_id: str, limit: int = 50) -> dict:
 			linked_document_type, linked_document_name, execution_time_ms,
 			message_text, reply_text, creation, whatsapp_timestamp
 		FROM `tabElsaidy WhatsApp Log`
-		WHERE conversation_id = %s
-		   OR sender_phone = %s
-		   OR receiver_phone = %s
-		   OR group_jid = %s
-		   OR (sender_phone = %s AND %s != '')
-		   OR (receiver_phone = %s AND %s != '')
+		WHERE (is_group = 1 AND group_jid = %s AND %s = 1)
+		   OR (COALESCE(is_group, 0) = 0 AND %s = 0 AND (
+		       conversation_id = %s OR sender_phone = %s OR receiver_phone = %s
+		       OR sender_lid = %s OR receiver_jid = %s OR reply_jid = %s
+		   ))
 		ORDER BY creation DESC
 		LIMIT %s
-	""", (norm, clean_id, clean_id, clean_id, norm, norm, norm, norm, limit), as_dict=True)
+	""", (clean_id, int(clean_id.endswith("@g.us")), int(clean_id.endswith("@g.us")),
+		norm, norm, norm, clean_id, clean_id, resolve_destination_jid(clean_id), limit), as_dict=True)
 
 	is_takeover = False
 	try:

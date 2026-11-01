@@ -81,7 +81,8 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 
 				const html = `
 					<div class="alert alert-info" style="font-size:12px;">
-						أخطاء فك التشفير: ${data.telemetry_available ? Number(transport.decryption_errors || 0) : 'غير متاح'} |
+						أخطاء فك التشفير: ${data.telemetry_available ? Number(transport.decryption_errors || 0) : 'غير متاح'}
+						(منها مزامنة ذاتية: ${data.telemetry_available ? Number(transport.self_decryption_errors || 0) : 'غير متاح'}) |
 						رسائل غائبة عن العقدة: ${data.telemetry_available ? Number(transport.absent_messages || 0) : 'غير متاح'} |
 						أحداث تنتظر ERP: ${data.telemetry_available ? Number(transport.webhook_pending || 0) : 'غير متاح'}<br>
 						آخر وارد: ${frappe.utils.escape_html(transport.last_inbound || 'غير متاح')} |

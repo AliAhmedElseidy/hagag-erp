@@ -226,6 +226,7 @@ class BridgeTests(unittest.TestCase):
         result = self.bridge.get_conversation_thread('966500000001', -1)
         self.assertEqual([r.message_id for r in result['messages']], ['OLD', 'NEW'])
         self.assertIn('ORDER BY creation DESC', self.frappe.db.sql.call_args.args[0])
+        self.assertIn('COALESCE(is_group, 0) = 0', self.frappe.db.sql.call_args.args[0])
         self.assertEqual(self.frappe.db.sql.call_args.args[1][-1], 1)
 
     def test_worker_never_replays_uncertain_processing_record(self):

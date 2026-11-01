@@ -507,7 +507,7 @@ async function initBaileysSocket(reason = 'Startup') {
         shouldSyncHistoryMessage: () => false,
         markOnlineOnConnect: false,
         // The installed 6.7.24 API applies this before attempting to decrypt ignored channels.
-        shouldIgnoreJid: jid => jid === 'status@broadcast' || jid.endsWith('@broadcast') || jid.endsWith('@newsletter'),
+        shouldIgnoreJid: jid => typeof jid === 'string' && (jid === 'status@broadcast' || jid.endsWith('@broadcast') || jid.endsWith('@newsletter')),
         generateHighQualityLinkPreview: false,
         logger,
         printQRInTerminal: false,

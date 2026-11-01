@@ -163,3 +163,13 @@ test('identity and retry classification do not infer LID from phone length', () 
   assert.equal(safety.retryKind(['Bad MAC']), 'bad_mac');
   assert.equal(safety.webhookAccepted(true, { message: { status: 'error' } }), false);
 });
+
+test('ignored-channel predicate accepts absent routing metadata from offline protocol nodes', async t => {
+  const h = harness(t); await h.initBaileysSocket();
+  const ignore = h.sockets[0].config.shouldIgnoreJid;
+  assert.equal(ignore(undefined), false);
+  assert.equal(ignore(null), false);
+  assert.equal(ignore('status@broadcast'), true);
+  assert.equal(ignore('123@newsletter'), true);
+  assert.equal(ignore('123@lid'), false);
+});

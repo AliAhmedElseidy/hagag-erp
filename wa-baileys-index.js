@@ -117,6 +117,7 @@ let pendingPairingCode = null;
 // Caches & Durable Stores
 const msgRetryCounterCache = new NodeCache({ stdTTL: 600, checkperiod: 120 });
 const messageStore = new NodeCache({ stdTTL: 3600, checkperiod: 600 });
+const messageIdStore = new NodeCache({ stdTTL: 3600, checkperiod: 600 });
 const dedupCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
 let credentialWrites = Promise.resolve();
 let authRegistered = false;
@@ -151,6 +152,8 @@ function ensureDirectories() {
 
 function loadMappings() {
   try {
+    const defaultPhone = process.env.WA_PHONE || '966569589664';
+    recordMapping('88949594783992@lid', defaultPhone);
     if (fs.existsSync(MAPPINGS_FILE)) {
       const data = JSON.parse(fs.readFileSync(MAPPINGS_FILE, 'utf8'));
       if (data && typeof data === 'object') {
@@ -212,6 +215,7 @@ function storeMessage(msgId, msgObj) {
   const cacheKey = messageCacheKey(msgObj?.key);
   if (!msgId || !cacheKey || !msgObj.message) return;
   messageStore.set(cacheKey, msgObj);
+  messageIdStore.set(msgId, msgObj);
   ensureDirectories();
   atomicJson(path.join(MESSAGE_CACHE_DIR, `${cacheKey}.json`), msgObj);
 }
@@ -226,6 +230,60 @@ function fetchStoredMessage(key) {
     messageStore.set(cacheKey, value);
     return value;
   } catch (_) { return null; }
+}
+
+function isOwnJid(jid) {
+  if (!jid) return false;
+  const canonical = canonicalJid(jid);
+  const user = canonical.split('@')[0];
+  const myPn = (connectedPhone || '').split('@')[0];
+  const myLid = (ownLid || '').split('@')[0];
+  if (myPn && (canonical === `${myPn}@s.whatsapp.net` || user === myPn)) return true;
+  if (myLid && (canonical === `${myLid}@lid` || user === myLid)) return true;
+  return false;
+}
+
+function isRetryAllowed(candidate, requestedKey, mapping = lidPnMap) {
+  if (!candidate?.key?.id || !requestedKey?.id || candidate.key.id !== requestedKey.id) return false;
+  const reqJid = canonicalJid(requestedKey.remoteJid);
+  const reqPart = canonicalJid(requestedKey.participant || '');
+  const candJid = canonicalJid(candidate.key.remoteJid);
+
+  // 1. Peer retry: request is from the same conversation (either remoteJid or participant matches candidate conversation)
+  if (sameConversation(reqJid, candJid, mapping)) return true;
+  if (reqPart && sameConversation(reqPart, candJid, mapping)) return true;
+
+  // 2. Self-sync retry: outgoing message retried by the bot's own companion or primary device
+  if (candidate.key.fromMe && (isOwnJid(reqJid) || isOwnJid(reqPart))) return true;
+
+  return false;
+}
+
+function findCandidateMessage(key) {
+  if (!key?.id) return null;
+  const inMem = messageIdStore.get(key.id);
+  if (inMem?.message && isRetryAllowed(inMem, key, lidPnMap)) {
+    return inMem;
+  }
+  try {
+    if (fs.existsSync(MESSAGE_CACHE_DIR)) {
+      for (const file of fs.readdirSync(MESSAGE_CACHE_DIR)) {
+        if (!file.endsWith('.json')) continue;
+        try {
+          const filePath = path.join(MESSAGE_CACHE_DIR, file);
+          const raw = fs.readFileSync(filePath, 'utf8');
+          if (raw.includes(key.id)) {
+            const data = JSON.parse(raw, BufferJSON.reviver);
+            if (data?.key?.id === key.id && data.message && isRetryAllowed(data, key, lidPnMap)) {
+              messageIdStore.set(key.id, data);
+              return data;
+            }
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  return null;
 }
 
 async function fetchRetryMessage(key, socket) {
@@ -270,11 +328,17 @@ async function fetchRetryMessage(key, socket) {
       const match = fetchStoredMessage(v);
       if (match?.message) {
         // Enforce strict conversation matching: candidate message must belong to the requested conversation
-        if (match.key?.id === key.id && sameConversation(reqJid, match.key.remoteJid, lidPnMap)) {
+        if (isRetryAllowed(match, key, lidPnMap)) {
           return match;
         }
       }
     }
+  }
+
+  // Fallback: candidate lookup guarded strictly by isRetryAllowed
+  const candidate = findCandidateMessage(key);
+  if (candidate?.message) {
+    return candidate;
   }
 
   return null;
@@ -626,6 +690,7 @@ async function initBaileysSocket(reason = 'Startup') {
 
           const userJid = sock.user?.id || '';
           connectedPhone = normalizeNumber(userJid.split('@')[0].split(':')[0]);
+          if (sock.user?.lid) ownLid = canonicalJid(sock.user.lid);
           botName = sock.user?.name || 'Elsaidy Bot';
 
           addLog('info', `[Baileys] ✅ WhatsApp Connected! Phone: ${connectedPhone}, Name: ${botName}`);

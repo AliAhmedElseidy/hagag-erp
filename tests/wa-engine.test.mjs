@@ -56,7 +56,7 @@ function harness(t, registered = true) {
   let source = fs.readFileSync(new URL('../wa-baileys-index.js', import.meta.url), 'utf8');
   source = source.replace(/^import[\s\S]*?from\s+['"][^'"]+['"];\s*/gm, '');
   source = source.split('// ─── Server Startup')[0];
-  source += '\nglobalThis.engine = { initBaileysSocket, handlePairingCode, handleSendMessage, storeMessage, fetchStoredMessage, fetchRetryMessage, drainWebhookOutbox, queueWebhook, authorized, metrics, unwrapMessage, extractMessageText, recordMapping, state: () => currentState, credentialWrites: () => credentialWrites };';
+  source += '\nglobalThis.engine = { initBaileysSocket, handlePairingCode, handleSendMessage, storeMessage, fetchStoredMessage, fetchRetryMessage, isRetryAllowed, findCandidateMessage, isOwnJid, drainWebhookOutbox, queueWebhook, authorized, metrics, unwrapMessage, extractMessageText, recordMapping, state: () => currentState, credentialWrites: () => credentialWrites };';
   vm.createContext(context); vm.runInContext(source, context);
   function response() { return { code: 200, body: null, status(n) { this.code = n; return this; }, json(v) { this.body = v; return this; } }; }
   const request = body => ({ headers: { authorization: 'Bearer unit-test-only' }, body, query: {} });
@@ -256,4 +256,49 @@ test('cross-conversation message disclosure is strictly blocked during retry', a
   // Alice tries to fetch Bob's message ID -> BLOCKED
   const aliceTryBob = await h.fetchRetryMessage({ id: 'BOB-SECRET-002', remoteJid: aliceJid, fromMe: false });
   assert.equal(aliceTryBob, null, 'Alice must not access Bob message');
+});
+
+test('self-sync retry requests from bot own companion devices succeed without session drop', async t => {
+  const h = harness(t);
+  await h.initBaileysSocket();
+  await h.sockets[0].events.get('connection.update')({ connection: 'open' });
+
+  // Bot sent an outbound message to Saudi handset
+  const outKey = { id: 'SELF-SYNC-001', remoteJid: '88949594783992@lid', fromMe: true };
+  h.storeMessage(outKey.id, { key: outKey, message: { conversation: 'synced outbound' } });
+
+  // 1. Bot's own companion device (:99@lid) requests retry for self-sync
+  const companionLidKey = { id: 'SELF-SYNC-001', remoteJid: '999:99@lid', fromMe: true, participant: '999:99@lid' };
+  const foundSyncLid = await h.fetchRetryMessage(companionLidKey);
+  assert.equal(foundSyncLid?.message?.conversation, 'synced outbound', 'Self-sync via bot companion LID must succeed');
+
+  // 2. Bot's own primary phone device (:1@s.whatsapp.net) requests retry for self-sync
+  const companionPnKey = { id: 'SELF-SYNC-001', remoteJid: '201000000000:1@s.whatsapp.net', fromMe: true };
+  const foundSyncPn = await h.fetchRetryMessage(companionPnKey);
+  assert.equal(foundSyncPn?.message?.conversation, 'synced outbound', 'Self-sync via bot companion PN must succeed');
+
+  // 3. Unrelated party Eve pretending to do self-sync -> BLOCKED
+  const eveFakeSelf = { id: 'SELF-SYNC-001', remoteJid: '201000000003:99@s.whatsapp.net', fromMe: true };
+  const eveBlocked = await h.fetchRetryMessage(eveFakeSelf);
+  assert.equal(eveBlocked, null, 'Fake self-sync from third party must be strictly blocked');
+});
+
+test('cold-boot disk cache fallback recovers message and enforces authorization', async t => {
+  const h = harness(t);
+  const outKey = { id: 'DISK-RETRY-001', remoteJid: '88949594783992@lid', fromMe: true };
+  h.storeMessage(outKey.id, { key: outKey, message: { conversation: 'disk message' } });
+
+  // Evict in-memory stores to simulate cold restart
+  h.context.NodeCache.prototype.get = () => undefined;
+
+  // Handset requests retry: recovered from disk scan and verified
+  h.recordMapping('88949594783992@lid', '966569589664');
+  const peerKey = { id: 'DISK-RETRY-001', remoteJid: '966569589664@s.whatsapp.net', fromMe: false };
+  const found = await h.fetchRetryMessage(peerKey);
+  assert.equal(found?.message?.conversation, 'disk message', 'Should recover from disk when cache is cold');
+
+  // Third party requests retry: blocked even on disk scan
+  const eveKey = { id: 'DISK-RETRY-001', remoteJid: '966500000000@s.whatsapp.net', fromMe: false };
+  const blocked = await h.fetchRetryMessage(eveKey);
+  assert.equal(blocked, null, 'Third party must not recover disk message');
 });

@@ -224,8 +224,9 @@ function storeMessage(msgId, msgObj) {
   ensureDirectories();
   atomicJson(path.join(MESSAGE_CACHE_DIR, `${cacheKey}.json`), msgObj);
   try {
+    const safeMsgId = encodeURIComponent(msgId);
     if (!fs.existsSync(MESSAGE_ID_INDEX_DIR)) fs.mkdirSync(MESSAGE_ID_INDEX_DIR, { recursive: true, mode: 0o700 });
-    atomicJson(path.join(MESSAGE_ID_INDEX_DIR, `${msgId}.json`), { cacheKey });
+    atomicJson(path.join(MESSAGE_ID_INDEX_DIR, `${safeMsgId}.json`), { cacheKey });
   } catch (_) {}
 }
 
@@ -277,7 +278,8 @@ function findCandidateMessage(key) {
   }
   // 2. Direct O(1) indexed disk lookup
   try {
-    const indexPath = path.join(MESSAGE_ID_INDEX_DIR, `${key.id}.json`);
+    const safeMsgId = encodeURIComponent(key.id);
+    const indexPath = path.join(MESSAGE_ID_INDEX_DIR, `${safeMsgId}.json`);
     if (fs.existsSync(indexPath)) {
       const idx = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
       if (idx?.cacheKey) {

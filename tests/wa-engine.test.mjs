@@ -83,6 +83,17 @@ test('pairing works on an unregistered existing socket', async t => {
   assert.equal(r.body.code, '12345678'); assert.equal(h.sockets.length, 1);
 });
 
+test('an empty or incomplete existing auth file never creates a replacement socket or QR', async t => {
+  for (const value of ['', '{}']) {
+    const h = harness(t);
+    fs.writeFileSync(path.join(h.directory, 'creds.json'), value);
+    await h.initBaileysSocket();
+    assert.equal(h.sockets.length, 0);
+    assert.equal(h.state(), 'ERROR');
+    assert.equal(fs.readFileSync(path.join(h.directory, 'creds.json'), 'utf8'), value);
+  }
+});
+
 test('concurrent init has one socket; reconnect creates a fresh Signal cache', async t => {
   const h = harness(t); await Promise.all([h.initBaileysSocket(), h.initBaileysSocket()]);
   assert.equal(h.sockets.length, 1);

@@ -468,6 +468,15 @@ async function initBaileysSocket(reason = 'Startup') {
 
       await credentialWrites;
       await Promise.all([...keyWrites]);
+      const credentialsPath = path.join(SESSION_DIR, 'creds.json');
+      if (fs.existsSync(credentialsPath)) {
+        let existingCredentials;
+        try { existingCredentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'), BufferJSON.reviver); }
+        catch { throw new Error('Existing authentication file is unreadable; replacement and pairing are blocked'); }
+        if (!existingCredentials?.noiseKey?.private || !existingCredentials?.signedIdentityKey?.private) {
+          throw new Error('Existing authentication file is incomplete; replacement and pairing are blocked');
+        }
+      }
       const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
       const persistKeys = state.keys.set.bind(state.keys);
       state.keys.set = data => {

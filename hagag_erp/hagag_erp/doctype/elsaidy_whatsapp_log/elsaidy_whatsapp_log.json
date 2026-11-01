@@ -27,7 +27,11 @@
   "sec_content",
   "message_text",
   "reply_text",
-  "error_message"
+  "error_message",
+  "conversation_id",
+  "in_reply_to",
+  "whatsapp_timestamp",
+  "inbound_payload"
  ],
  "fields": [
   {
@@ -98,10 +102,10 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "الحالة",
-   "options": "Received\nProcessed\nReplied\nIgnored\nFailed"
+   "options": "Received\nProcessed\nReplied\nIgnored\nFailed\nProcessing"
   },
   {
-   "default": "Sent",
+   "default": "Pending",
    "fieldname": "delivery_status",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -164,6 +168,29 @@
    "fieldname": "error_message",
    "fieldtype": "Long Text",
    "label": "رسالة الخطأ"
+  },
+  {
+   "fieldname": "conversation_id",
+   "fieldtype": "Data",
+   "label": "Conversation identity",
+   "search_index": 1
+  },
+  {
+   "fieldname": "in_reply_to",
+   "fieldtype": "Data",
+   "label": "Reply to message ID"
+  },
+  {
+   "fieldname": "whatsapp_timestamp",
+   "fieldtype": "Datetime",
+   "label": "WhatsApp timestamp (UTC)"
+  },
+  {
+   "fieldname": "inbound_payload",
+   "fieldtype": "Long Text",
+   "label": "Inbound processing payload",
+   "hidden": 1,
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,

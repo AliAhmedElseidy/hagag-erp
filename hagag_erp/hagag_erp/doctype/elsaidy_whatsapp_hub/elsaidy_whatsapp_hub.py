@@ -13,6 +13,7 @@ from hagag_erp.whatsapp_bridge import (
 	restart_baileys_internal,
 	logout_baileys_internal
 )
+from hagag_erp.whatsapp_bridge import require_hub_permission
 
 
 class ElsaidyWhatsAppHub(Document):
@@ -28,12 +29,14 @@ class ElsaidyWhatsAppHub(Document):
 
 	@frappe.whitelist()
 	def refresh_status(self):
+		require_hub_permission("read")
 		status = get_hub_status_internal(self)
 		self.reload()
 		return status
 
 	@frappe.whitelist()
 	def request_pairing(self, phone=None):
+		require_hub_permission("write", admin=True)
 		phone = phone or self.bot_phone_number
 		if not phone:
 			frappe.throw("الرجاء إدخال رقم الهاتف أولاً لطلب رمز الإقران.")
@@ -41,16 +44,20 @@ class ElsaidyWhatsAppHub(Document):
 
 	@frappe.whitelist()
 	def get_qr(self):
+		require_hub_permission("write", admin=True)
 		return get_qr_code_internal(self)
 
 	@frappe.whitelist()
 	def sync_groups(self):
+		require_hub_permission("write")
 		return fetch_whatsapp_groups_internal(self)
 
 	@frappe.whitelist()
 	def restart_service(self):
+		require_hub_permission("write", admin=True)
 		return restart_baileys_internal(self)
 
 	@frappe.whitelist()
 	def logout_service(self):
+		require_hub_permission("write", admin=True)
 		return logout_baileys_internal(self)

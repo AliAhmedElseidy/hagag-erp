@@ -7,6 +7,18 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 		frm.trigger('render_message_center');
 		frm.trigger('render_diagnostics_tab');
 		frm.trigger('setup_action_buttons');
+		frm.$wrapper.attr('dir', 'rtl');
+		clearInterval(frm._hub_poll);
+		frm._hub_poll = setInterval(() => {
+			if (cur_frm !== frm || !frm.$wrapper.is(':visible')) {
+				clearInterval(frm._hub_poll);
+				return;
+			}
+			if (document.hidden) return;
+			frm.trigger('render_dashboard_telemetry');
+			window.hub_refresh_convs?.();
+			window.hub_refresh_active_thread?.();
+		}, 15000);
 	},
 
 	// ─── Render Dashboard & Telemetry ──────────────────────────────────────────
@@ -16,21 +28,16 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 			callback: function(r) {
 				const data = r.message || {};
 				const engineState = (data.engine_state || frm.doc.connection_status || 'DISCONNECTED').toUpperCase();
-				const isConnected = data.whatsapp_connected || engineState === 'CONNECTED';
+				const isConnected = data.telemetry_available === true && data.whatsapp_connected === true;
 				const isConnecting = engineState === 'CONNECTING';
 				const isResetting = engineState === 'RESETTING';
-				const phone = data.connected_phone || frm.doc.connected_phone || frm.doc.bot_phone_number || 'غير متصل';
-				const botName = data.bot_name || 'Elsaidy WhatsApp Bot';
+				const phone = frappe.utils.escape_html(data.connected_phone || 'غير متصل');
+				const botName = frappe.utils.escape_html(data.bot_name || 'Elsaidy WhatsApp Bot');
 				const uptimeSec = data.uptime_seconds || 0;
 				const uptimeFormatted = frm.events.format_uptime(uptimeSec);
 				const metrics = data.today_metrics || {};
-
-				if (isConnected && frm.doc.connection_status !== 'Connected') {
-					frm.set_value('connection_status', 'Connected');
-				}
-				if (data.connected_phone && frm.doc.connected_phone !== data.connected_phone) {
-					frm.set_value('connected_phone', data.connected_phone);
-				}
+				const transport = data.transport_metrics || {};
+				const transportErrors = data.telemetry_available ? Number(transport.errors || 0) : 'غير متاح';
 
 				let statusBadge = '';
 				let borderColor = '#dc3545';
@@ -73,6 +80,14 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 				}
 
 				const html = `
+					<div class="alert alert-info" style="font-size:12px;">
+						أخطاء فك التشفير: ${data.telemetry_available ? Number(transport.decryption_errors || 0) : 'غير متاح'} |
+						رسائل غائبة عن العقدة: ${data.telemetry_available ? Number(transport.absent_messages || 0) : 'غير متاح'} |
+						أحداث تنتظر ERP: ${data.telemetry_available ? Number(transport.webhook_pending || 0) : 'غير متاح'}<br>
+						آخر وارد: ${frappe.utils.escape_html(transport.last_inbound || 'غير متاح')} |
+						آخر صادر مقبول: ${frappe.utils.escape_html(transport.last_outbound || 'غير متاح')}<br>
+						Sent = استلام خادم واتساب؛ Delivered = إيصال تسليم للجهاز. القبول وحده لا يثبت الوصول.
+					</div>
 					<!-- Top Status Banner -->
 					<div style="border: 2px solid ${borderColor}; background-color: ${bgColor}; border-radius: 10px; padding: 18px 22px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
 						<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
@@ -122,7 +137,7 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 						</div>
 						<div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:15px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
 							<div style="font-size:12px; color:#64748b; font-weight:bold;">⚠️ أخطاء اليوم</div>
-							<div style="font-size:24px; font-weight:bold; color:#dc2626; margin-top:5px;">${metrics.failed || 0}</div>
+							<div style="font-size:24px; font-weight:bold; color:#dc2626; margin-top:5px;">${Number(metrics.failed || 0)} / ${transportErrors}</div>
 							<div style="font-size:11px; color:#94a3b8; margin-top:2px;">فشل في المعالجة</div>
 						</div>
 					</div>
@@ -152,15 +167,25 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 	render_message_center: function(frm) {
 		const containerHtml = `
 			<div id="hub-message-center-wrapper" style="border:1px solid #e2e8f0; border-radius:10px; background:#fff; overflow:hidden; box-shadow:0 2px 10px rgba(0,0,0,0.03); margin-bottom:20px;">
-				<div style="display:flex; height:600px; flex-direction:row-reverse;">
-					<!-- Left Sidebar: Conversations List -->
-					<div style="width:340px; border-left:1px solid #e2e8f0; background:#f8fafc; display:flex; flex-direction:column;">
+				<div class="hub-inbox-layout" style="display:flex; height:600px; flex-direction:row-reverse;">
+					<style>
+				@media (max-width: 760px) {
+					.hub-inbox-layout { flex-direction: column !important; height: 85vh !important; }
+					.hub-inbox-sidebar { width: 100% !important; max-height: 220px; }
+				}
+				</style>
+				<!-- Left Sidebar: Conversations List -->
+					<div class="hub-inbox-sidebar" style="width:340px; border-left:1px solid #e2e8f0; background:#f8fafc; display:flex; flex-direction:column;">
 						<div style="padding:14px; border-bottom:1px solid #e2e8f0; background:#fff;">
 							<div style="position:relative;">
 								<input type="text" id="hub-conv-search" class="form-control input-sm" placeholder="🔍 بحث في المحادثات..." style="border-radius:20px; padding-right:15px; padding-left:30px; font-size:13px;" />
 								<i class="fa fa-refresh" style="position:absolute; left:12px; top:8px; color:#94a3b8; cursor:pointer;" onclick="window.hub_refresh_convs()"></i>
 							</div>
 						</div>
+						<select id="hub-conv-filter" class="form-control input-sm" aria-label="فلتر المحادثات">
+							<option value="all">كل المحادثات</option><option value="direct">أفراد</option>
+							<option value="groups">مجموعات</option><option value="failed">فشل</option><option value="takeover">تدخل بشري</option>
+						</select>
 						<div id="hub-conversations-list" style="flex:1; overflow-y:auto; padding:5px 0;">
 							<div style="text-align:center; padding:30px; color:#94a3b8; font-size:13px;">
 								<i class="fa fa-spinner fa-spin"></i> جاري تحميل المحادثات...
@@ -222,7 +247,7 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 			const search = $('#hub-conv-search').val() || '';
 			frappe.call({
 				method: 'hagag_erp.whatsapp_bridge.get_message_center_conversations',
-				args: { search: search, limit: 30 },
+				args: { search: search, limit: 30, conversation_filter: $('#hub-conv-filter').val() || 'all' },
 				callback: function(r) {
 					const data = r.message || {};
 					const convs = data.conversations || [];
@@ -240,9 +265,9 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 						const timeStr = c.last_time ? c.last_time.split(' ')[1].substring(0, 5) : '';
 						const takeoverBadge = c.human_takeover ? '<span class="badge" style="background:#e11d48; color:#fff; font-size:10px; margin-right:4px;">يدوي</span>' : '';
 						const groupBadge = c.is_group ? '<span class="badge" style="background:#0284c7; color:#fff; font-size:10px; margin-right:4px;">مجموعة</span>' : '';
-						
+
 						return `
-							<div class="hub-conv-item" data-id="${c.partner_id}" data-name="${frappe.utils.escape_html(c.contact_name)}" data-is-group="${c.is_group ? 1 : 0}" style="padding:12px 14px; border-bottom:1px solid #f1f5f9; background:${bg}; cursor:pointer; transition:background 0.15s ease;" onclick="window.hub_select_conv('${c.partner_id}', '${frappe.utils.escape_html(c.contact_name)}', ${c.is_group})">
+							<div class="hub-conv-item" data-id="${frappe.utils.escape_html(c.partner_id)}" data-name="${frappe.utils.escape_html(c.contact_name)}" data-is-group="${c.is_group ? 1 : 0}" style="padding:12px 14px; border-bottom:1px solid #f1f5f9; background:${bg}; cursor:pointer; transition:background 0.15s ease;">
 								<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
 									<div style="font-weight:bold; font-size:13px; color:#1e293b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:210px;">
 										${takeoverBadge}${groupBadge}${frappe.utils.escape_html(c.contact_name || c.partner_id)}
@@ -260,6 +285,9 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 					}).join('');
 
 					listEl.html(items);
+					listEl.find('.hub-conv-item').on('click', function() {
+						window.hub_select_conv($(this).attr('data-id'), $(this).attr('data-name'), $(this).attr('data-is-group') === '1');
+					});
 				}
 			});
 		};
@@ -267,7 +295,7 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 		window.hub_select_conv = function(targetId, targetName, isGroup) {
 			window.hub_active_target = targetId;
 			window.hub_active_name = targetName;
-			
+
 			$('#hub-chat-title').text(targetName || targetId);
 			$('#hub-chat-subtitle').text(isGroup ? 'مجموعة واتساب' : `رقم الهاتف: ${targetId}`);
 			$('#hub-chat-avatar').text(isGroup ? '👥' : '👤');
@@ -275,18 +303,20 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 			$('#hub-chat-input-bar').css('display', 'flex');
 
 			$('.hub-conv-item').css('background', '#fff');
-			$(`.hub-conv-item[data-id="${targetId}"]`).css('background', '#eef2f6');
+			$('.hub-conv-item').filter(function() { return $(this).attr('data-id') === targetId; }).css('background', '#eef2f6');
 
 			window.hub_refresh_active_thread();
 		};
 
 		window.hub_refresh_active_thread = function() {
 			if (!window.hub_active_target) return;
+			const requestedTarget = window.hub_active_target;
 			frappe.call({
 				method: 'hagag_erp.whatsapp_bridge.get_conversation_thread',
 				args: { target_id: window.hub_active_target, limit: 60 },
 				callback: function(r) {
 					const data = r.message || {};
+					if (requestedTarget !== window.hub_active_target) return;
 					const msgs = data.messages || [];
 					window.hub_is_takeover = Boolean(data.human_takeover);
 
@@ -311,12 +341,16 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 						const bubbleBg = isOut ? '#d9fdd3' : '#ffffff';
 						const align = isOut ? 'flex-start' : 'flex-end';
 						const borderRad = isOut ? '8px 8px 0px 8px' : '8px 8px 8px 0px';
-						const timeStr = m.creation ? m.creation.split(' ')[1].substring(0, 5) : '';
-						
+						const timeStr = frappe.utils.escape_html(m.whatsapp_timestamp
+							? new Date(String(m.whatsapp_timestamp).replace(' ', 'T') + 'Z').toLocaleString('ar-EG')
+							: frappe.datetime.str_to_user(m.creation || ''));
+
 						let statusIcon = '';
 						if (isOut) {
 							if (m.delivery_status === 'Read') statusIcon = '<span style="color:#53bdeb; font-weight:bold;">✓✓</span>';
 							else if (m.delivery_status === 'Delivered') statusIcon = '<span style="color:#8696a0; font-weight:bold;">✓✓</span>';
+							else if (m.delivery_status === 'Failed') statusIcon = '<span style="color:#dc3545;">فشل</span>';
+							else if (m.delivery_status === 'Pending') statusIcon = '<span>◷</span>';
 							else statusIcon = '<span style="color:#8696a0;">✓</span>';
 						}
 
@@ -324,9 +358,9 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 						if (m.linked_document_type && m.linked_document_name) {
 							linkedBadge = `
 								<div style="margin-top:6px; padding:4px 8px; background:rgba(0,0,0,0.04); border-radius:4px; font-size:11px;">
-									🔗 <strong>${m.linked_document_type}:</strong> 
-									<a href="/app/${frappe.router.slug(m.linked_document_type)}/${m.linked_document_name}" target="_blank" style="color:#0284c7; text-decoration:underline;">
-										${m.linked_document_name}
+									🔗 <strong>${frappe.utils.escape_html(m.linked_document_type)}:</strong>
+									<a href="/app/${encodeURIComponent(frappe.router.slug(m.linked_document_type))}/${encodeURIComponent(m.linked_document_name)}" target="_blank" style="color:#0284c7; text-decoration:underline;">
+										${frappe.utils.escape_html(m.linked_document_name)}
 									</a>
 								</div>
 							`;
@@ -368,7 +402,7 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 				callback: function(r) {
 					if (r.message && r.message.status === 'ok') {
 						input.val('');
-						frappe.show_alert({ message: __('تم إرسال الرد بنجاح!'), indicator: 'green' });
+						frappe.show_alert({ message: __('تم قبول الرد للإرسال؛ حالة التسليم هتتحدث من الإيصال.'), indicator: 'green' });
 						window.hub_refresh_active_thread();
 						window.hub_refresh_convs();
 					} else {
@@ -399,6 +433,7 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 		};
 
 		// Bind events
+		$('#hub-conv-filter').on('change', window.hub_refresh_convs);
 		$('#hub-conv-search').on('keyup', frappe.utils.debounce(window.hub_refresh_convs, 300));
 		$('#hub-inbox-input').on('keypress', function(e) {
 			if (e.which === 13) {
@@ -419,9 +454,12 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 				const b = rep.baileys || {};
 				const e = rep.erpnext || {};
 				const mem = b.memory_mb || {};
+				const server = rep.server_diagnostics || {};
+				const storage = server.session || {};
+				const escape = value => frappe.utils.escape_html(String(value ?? "غير متاح"));
 
 				const bReachable = b.reachable ? '<span class="badge badge-success">متاح 200 OK</span>' : '<span class="badge badge-danger">غير متاح</span>';
-				const bConn = b.connected ? '<span class="badge badge-success">متصل (CONNECTED)</span>' : `<span class="badge badge-warning">${b.engine_state}</span>`;
+				const bConn = b.connected ? '<span class="badge badge-success">متصل (CONNECTED)</span>' : `<span class="badge badge-warning">${escape(b.engine_state)}</span>`;
 				const dbConn = e.db_connected ? '<span class="badge badge-success">متصل MariaDB</span>' : '<span class="badge badge-danger">فشل</span>';
 
 				const diagHtml = `
@@ -442,10 +480,15 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 								<table class="table table-condensed" style="margin:0; font-size:12px;">
 									<tr><td>الاتصال بالحاوية:</td><td>${bReachable}</td></tr>
 									<tr><td>حالة المقبس:</td><td>${bConn}</td></tr>
-									<tr><td>رقم البوت:</td><td dir="ltr" style="font-family:monospace;">${b.phone || 'غير محدد'}</td></tr>
+									<tr><td>رقم البوت:</td><td dir="ltr" style="font-family:monospace;">${escape(b.phone || 'غير محدد')}</td></tr>
 									<tr><td>مدة التشغيل:</td><td>${frm.events.format_uptime(b.uptime_seconds)}</td></tr>
 									<tr><td>استهلاك الذاكرة:</td><td dir="ltr">${mem.rss || 0} MB RSS</td></tr>
-									<tr><td>الإصدار:</td><td><code>${b.version}</code></td></tr>
+									<tr><td>الإصدار:</td><td><code>${escape(b.version)}</code></td></tr>
+									<tr><td>Node / Baileys:</td><td>${escape(server.node_version)} / ${escape(server.baileys_version)}</td></tr>
+									<tr><td>نسخة النشر:</td><td><code>${escape(server.deployment_commit)}</code></td></tr>
+									<tr><td>مجلد الجلسة:</td><td>${storage.readable === undefined ? 'غير متاح' : storage.readable && storage.writable ? 'قراءة وكتابة متاحين' : 'مشكلة صلاحيات'}</td></tr>
+									<tr><td>ملف الربط:</td><td>${storage.credentials_present === undefined ? 'غير متاح' : storage.credentials_present ? 'موجود' : 'غير موجود'}</td></tr>
+									<tr><td>النسخ الاحتياطية / عدد إعادة التشغيل:</td><td>محتاج فحص VPS</td></tr>
 								</table>
 							</div>
 
@@ -456,8 +499,8 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 								</div>
 								<table class="table table-condensed" style="margin:0; font-size:12px;">
 									<tr><td>قاعدة البيانات:</td><td>${dbConn}</td></tr>
-									<tr><td>الموقع:</td><td><code>${e.site}</code></td></tr>
-									<tr><td>وضع البوت:</td><td><strong>${e.bot_mode}</strong></td></tr>
+									<tr><td>الموقع:</td><td><code>${escape(e.site)}</code></td></tr>
+									<tr><td>وضع البوت:</td><td><strong>${escape(e.bot_mode)}</strong></td></tr>
 									<tr><td>إجمالي سجلات واتساب:</td><td><strong style="color:#0284c7;">${e.total_logs}</strong> سجل</td></tr>
 									<tr><td>جهات الاتصال المصرحة:</td><td><strong>${e.active_contacts}</strong> جهة</td></tr>
 									<tr><td>المجموعات المسجلة:</td><td><strong>${e.active_groups}</strong> مجموعة</td></tr>
@@ -470,7 +513,7 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 								<i class="fa fa-terminal"></i> فتح شاشة السجلات الحية (Live Console)
 							</button>
 							<button class="btn btn-sm btn-info" onclick="cur_frm.trigger('open_heal_dialog')">
-								<i class="fa fa-medkit"></i> تشخيص وإصلاح Bad MAC الموجه
+								<i class="fa fa-medkit"></i> تشخيص الجلسة
 							</button>
 							<button class="btn btn-sm btn-default" onclick="cur_frm.trigger('open_test_ai_dialog')">
 								<i class="fa fa-bolt"></i> اختبار سرعة استجابة الذكاء الاصطناعي
@@ -485,9 +528,21 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 		});
 	},
 
+	show_frappe_logs: function(frm) {
+		frappe.call({ method: 'hagag_erp.whatsapp_bridge.get_frappe_whatsapp_logs',
+			callback(r) {
+				const logs = r.message?.logs || [];
+				const escape = frappe.utils.escape_html;
+				frappe.msgprint({ title: __('أخطاء WhatsApp في Frappe'), wide: true,
+					message: logs.length ? logs.map(row => `<p>${escape(row.creation)} — <a href="/app/error-log/${encodeURIComponent(row.name)}">${escape(row.method || row.name)}</a></p>`).join('') : __('مفيش أخطاء متاحة لحسابك.') });
+			}
+		});
+	},
+
 	// ─── Setup Action Buttons ──────────────────────────────────────────────────
 	setup_action_buttons: function(frm) {
 		frm.page.clear_actions();
+		frm.clear_custom_buttons();
 
 		// ── Connection Group ──────────────────────────────────────────────────
 		frm.add_custom_button(__('طلب كود الإقران'), function() {
@@ -499,7 +554,7 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 		}, __('اتصال واتساب'));
 
 		// ── Maintenance & Healing Group ───────────────────────────────────────
-		frm.add_custom_button(__('🩺 تشخيص وإصلاح Bad MAC الموجه'), function() {
+		frm.add_custom_button(__('🩺 تشخيص الجلسة'), function() {
 			frm.trigger('open_heal_dialog');
 		}, __('صيانة الجلسة'));
 
@@ -507,9 +562,6 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 			frm.trigger('restart_engine_action');
 		}, __('صيانة الجلسة'));
 
-		frm.add_custom_button(__('🧹 تطهير الجلسة بالكامل (Hard Reset)'), function() {
-			frm.trigger('wipe_session_action');
-		}, __('صيانة الجلسة'));
 
 		// ── Tools & Diagnostics Group ─────────────────────────────────────────
 		frm.add_custom_button(__('⚡ اختبار مزود الذكاء الاصطناعي'), function() {
@@ -523,6 +575,8 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 		frm.add_custom_button(__('📤 إرسال رسالة تجريبية'), function() {
 			frm.trigger('open_test_message_dialog');
 		}, __('أدوات واختبارات'));
+
+		frm.add_custom_button(__('سجلات أخطاء Frappe'), function() { frm.trigger('show_frappe_logs'); }, __('أدوات التشخيص'));
 
 		frm.add_custom_button(__('📋 سجلات السيرفر الحية'), function() {
 			frm.trigger('show_live_logs');
@@ -575,7 +629,7 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 								<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:15px;">
 									<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
 										<span class="badge badge-success" style="font-size:12px; padding:4px 8px;">
-											المزود: ${res.provider} (${res.model})
+											المزود: ${frappe.utils.escape_html(String(res.provider || ''))} (${frappe.utils.escape_html(String(res.model || ''))})
 										</span>
 										<span style="font-weight:bold; color:#0284c7; font-family:monospace; font-size:14px;">
 											⏱️ زمن الاستجابة: ${res.latency_ms} ms
@@ -589,7 +643,7 @@ ${frappe.utils.escape_html(res.reply || '')}
 							`;
 							d.set_value('result_html', html);
 						} else {
-							d.set_value('result_html', `<div class="alert alert-danger">${res.message || 'فشل الاختبار'}</div>`);
+							d.set_value('result_html', `<div class="alert alert-danger">${frappe.utils.escape_html(res.message || 'فشل الاختبار')}</div>`);
 						}
 					}
 				});
@@ -600,61 +654,11 @@ ${frappe.utils.escape_html(res.reply || '')}
 
 	// ─── Heal Bad MAC Dialog ───────────────────────────────────────────────────
 	open_heal_dialog: function(frm) {
-		const d = new frappe.ui.Dialog({
-			title: __('🩺 نظام التشخيص والإصلاح الذاتي لـ Bad MAC'),
-			fields: [
-				{
-					fieldname: 'target',
-					fieldtype: 'Data',
-					label: __('رقم الهاتف أو المعرف المستهدف (Target JID / Phone)'),
-					reqd: 1,
-					default: frm.doc.connected_phone || frm.doc.bot_phone_number || '',
-					description: __('أدخل رقم الهاتف أو معرف الجلسة مثل: 251036744843464.0 أو 966569589664 أو 120363...@g.us')
-				},
-				{
-					fieldtype: 'HTML',
-					fieldname: 'heal_info',
-					options: `
-						<div style="background:#eef6ff; border:1px solid #bfdbfe; border-radius:6px; padding:12px; margin-top:8px; font-size:12px; color:#1e40af; line-height:1.5;">
-							💡 <strong>آلية الإصلاح الموجه:</strong><br>
-							• يقوم النظام بحذف ملف المفتاح المتضرر فقط (مثل <code>session-...</code> أو <code>sender-key-...</code>).<br>
-							• <strong>لا يتم المساس</strong> بملف <code>creds.json</code> أو بيانات الربط الأساسية.<br>
-							• يستدعي المحرك دالة <code>assertSessions</code> لجلب مفاتيح PreKeys جديدة من خوادم واتساب فوراً.
-						</div>
-					`
-				}
-			],
-			primary_action_label: __('بدء الفحص والإصلاح الموجه'),
-			primary_action: function(values) {
-				d.hide();
-				frappe.call({
-					method: 'hagag_erp.whatsapp_bridge.heal_baileys_session',
-					args: { target: values.target },
-					freeze: true,
-					freeze_message: __('جاري فحص وإصلاح الجلسة الموجهة...'),
-					callback: function(r) {
-						const res = r.message || {};
-						if (res.status === 'ok') {
-							frappe.msgprint({
-								title: __('✅ نجاح عملية الإصلاح الموجه'),
-								indicator: 'green',
-								message: `<strong>النتيجة:</strong> ${res.message}<br>` +
-									`<strong>الملفات المحذوفة:</strong> ${res.deleted_files_count || 0}<br>` +
-									`<strong>إعادة جلب المفاتيح:</strong> ${res.session_reasserted ? 'نعم (PreKeys Updated)' : 'تم الحذف وتنتظر الاتصال'}`
-							});
-							frm.trigger('render_dashboard_telemetry');
-						} else {
-							frappe.msgprint({
-								title: __('تنبيه في الإصلاح'),
-								indicator: 'orange',
-								message: res.message || res.error || __('فشلت العملية')
-							});
-						}
-					}
-				});
-			}
+		frappe.msgprint({
+			title: __('تشخيص الجلسة'), indicator: 'blue',
+			message: __('حذف مفاتيح Signal ومسح الجلسة متوقفين لحماية الربط. راجع عدادات أخطاء فك التشفير والأحداث المعلقة وسجلات المحرك، ثم استخدم إعادة الاتصال الآمنة عند الحاجة.')
 		});
-		d.show();
+		frm.trigger('render_diagnostics_tab');
 	},
 
 	// ─── AI Simulator Dialog (Dry Run Mode) ───────────────────────────────────
@@ -713,7 +717,7 @@ ${frappe.utils.escape_html(res.reply || '')}
 											<td><strong style="color:#16a34a;">${res.parsed_entities.total_amount} ر.س</strong></td>
 											<td>${res.parsed_entities.net_amount} ر.س</td>
 											<td>${res.parsed_entities.tax_amount} ر.س</td>
-											<td>${res.parsed_entities.vendor}</td>
+											<td>${frappe.utils.escape_html(String(res.parsed_entities.vendor || ''))}</td>
 										</tr>
 									</table>
 								`;
@@ -723,22 +727,22 @@ ${frappe.utils.escape_html(res.reply || '')}
 								<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:15px;">
 									<div style="display:flex; justify-content:space-between; align-items:center;">
 										<span class="badge badge-success" style="font-size:13px; padding:5px 10px;">
-											القصد المكتشف: ${res.detected_intent}
+											القصد المكتشف: ${frappe.utils.escape_html(String(res.detected_intent || ''))}
 										</span>
-										<span style="font-size:11px; color:#64748b; font-weight:bold;">${res.mode}</span>
+										<span style="font-size:11px; color:#64748b; font-weight:bold;">${frappe.utils.escape_html(String(res.mode || ''))}</span>
 									</div>
 									${entitiesHtml}
 									<div style="margin-top:15px;">
 										<strong style="font-size:13px; color:#334155;">💬 الرد المتوقع إرساله للعميل عبر WhatsApp:</strong>
 										<div style="background:#fff; border:1px solid #cbd5e1; border-radius:8px; padding:12px; margin-top:6px; white-space:pre-wrap; font-family:inherit; font-size:13px; color:#0f172a; line-height:1.6;">
-${res.simulated_reply}
+${frappe.utils.escape_html(String(res.simulated_reply || ''))}
 										</div>
 									</div>
 								</div>
 							`;
 							simDialog.set_value('sim_result_html', previewHtml);
 						} else {
-							simDialog.set_value('sim_result_html', `<div class="alert alert-danger">${res.message || 'خطأ في المحاكاة'}</div>`);
+							simDialog.set_value('sim_result_html', `<div class="alert alert-danger">${frappe.utils.escape_html(res.message || 'خطأ في المحاكاة')}</div>`);
 						}
 					}
 				});
@@ -1035,27 +1039,7 @@ ${res.simulated_reply}
 
 	// ─── Wipe Session Action ──────────────────────────────────────────────────
 	wipe_session_action: function(frm) {
-		frappe.confirm(
-			__('⚠️ تحذير: سيتم مسح جلسة واتساب بالكامل وإلغاء الربط.\n\nهل أنت متأكد؟'),
-			function() {
-				frappe.call({
-					method: 'hagag_erp.whatsapp_bridge.wipe_baileys_session',
-					freeze: true,
-					freeze_message: __('جاري مسح الجلسة بالكامل...'),
-					callback: function(r) {
-						frm.reload_doc();
-						if (r.message && r.message.status === 'ok') {
-							frappe.msgprint({
-								title: __('تم تطهير الجلسة'),
-								indicator: 'blue',
-								message: __('تم مسح الجلسة بنجاح. يمكنك الآن إعادة الربط بكود إقران أو QR.')
-							});
-							setTimeout(() => frm.trigger('render_dashboard_telemetry'), 3000);
-						}
-					}
-				});
-			}
-		);
+		frappe.msgprint(__('مسح الجلسة متوقف لحماية الربط الحالي.'));
 	},
 
 	// ─── Test Message Dialog ──────────────────────────────────────────────────
@@ -1099,9 +1083,9 @@ ${res.simulated_reply}
 					freeze_message: __('جاري إرسال الرسالة إلى {0}...', [values.recipient]),
 					callback: function(r) {
 						if (r.message && r.message.status === 'ok') {
-							frappe.show_alert({ 
-								message: __('✅ تم إرسال الرسالة بنجاح للمستلم! المعرف: {0}', [r.message.msg_id || '']), 
-								indicator: 'green' 
+							frappe.show_alert({
+								message: __('✅ تم إرسال الرسالة بنجاح للمستلم! المعرف: {0}', [r.message.msg_id || '']),
+								indicator: 'green'
 							});
 							frm.trigger('render_dashboard_telemetry');
 						} else {

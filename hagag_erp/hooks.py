@@ -222,6 +222,10 @@ after_request = ["hagag_erp.hrms_inject.inject"]
 # ----------------
 after_migrate = ["hagag_erp.setup.sync_elsaidy_customizations"]
 
+scheduler_events = {
+	"cron": {"*/5 * * * *": ["hagag_erp.whatsapp_bridge.enqueue_pending_whatsapp_messages"]}
+}
+
 app_include_css = ["/assets/hagag_erp/css/hagag_desk_v16.css", "/assets/hagag_erp/css/elsaidy_whitelabel.css"]
 app_include_js = ["/assets/hagag_erp/js/hagag_desk_v16.js", "/assets/hagag_erp/js/hagag_chat.js", "/assets/hagag_erp/js/elsaidy_whitelabel.js"]
 web_include_css = ["/assets/hagag_erp/css/hagag_web_v15.css", "/assets/hagag_erp/css/elsaidy_whitelabel.css"]

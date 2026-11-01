@@ -60,7 +60,7 @@ def call_baileys_api(endpoint: str, method: str = "GET", data: dict = None, hub_
 	hub = get_hub_settings(hub_doc)
 	base_url = (hub.baileys_url if hub and hub.baileys_url else "http://wa-baileys:3000").rstrip("/")
 	
-	api_token = "HAGAG_WA_7f3c9a2d6e4b8a1c"
+	api_token = None
 	if hub and hasattr(hub, "get_password"):
 		try:
 			saved_token = hub.get_password("api_token", raise_exception=False)
@@ -68,6 +68,9 @@ def call_baileys_api(endpoint: str, method: str = "GET", data: dict = None, hub_
 				api_token = saved_token
 		except Exception:
 			pass
+
+	if not api_token:
+		return {"status": "error", "error": "Baileys API token is not configured"}
 
 	url = f"{base_url}/{endpoint.lstrip('/')}"
 	headers = {
@@ -540,7 +543,7 @@ def receive_baileys_event():
 	api_token_header = req.headers.get("x-api-token", "")
 	hub = get_hub_settings()
 	
-	expected_token = "HAGAG_WA_7f3c9a2d6e4b8a1c"
+	expected_token = None
 	if hub and hasattr(hub, "get_password"):
 		try:
 			saved_token = hub.get_password("api_token", raise_exception=False)
@@ -549,7 +552,7 @@ def receive_baileys_event():
 		except Exception:
 			pass
 
-	is_authed = (auth_header == f"Bearer {expected_token}") or (api_token_header == expected_token)
+	is_authed = bool(expected_token) and ((auth_header == f"Bearer {expected_token}") or (api_token_header == expected_token))
 	if not is_authed:
 		frappe.response["http_status_code"] = 401
 		return {"error": "Unauthorized"}
@@ -565,14 +568,14 @@ def receive_baileys_event():
 	# ── 1.1 Handle Delivery Status Updates ────────────────────────────────────
 	if event_type in ("status_update", "messages.update"):
 		msg_id = payload.get("message_id")
-		raw_status = payload.get("status")
+		raw_status = payload.get("status_code", payload.get("status"))
 		status_map = {
 			1: "Pending",
 			2: "Sent",
 			3: "Delivered",
 			4: "Read"
 		}
-		delivery_status = status_map.get(raw_status, "Sent")
+		delivery_status = status_map.get(raw_status, "Pending")
 		if msg_id:
 			try:
 				frappe.db.sql("""
@@ -927,11 +930,16 @@ def receive_baileys_event():
 	# 6. Send Quoted WhatsApp Reply
 	if reply_content and hub and hub.auto_reply_enabled:
 		try:
-			send_baileys_reply(reply_jid, reply_content, quoted_msg_id=msg_id)
+			send_result = send_baileys_reply(reply_jid, reply_content, quoted_msg_id=msg_id)
+			if send_result.get("status") != "ok" or not send_result.get("msg_id"):
+				raise RuntimeError(f"Baileys send was not accepted: {send_result.get('error') or send_result.get('reason') or send_result.get('status')}")
 			log_doc.status = "Replied"
 			log_doc.delivery_status = "Sent"
 		except Exception as reply_err:
-			frappe.log_error(f"WhatsApp Reply Send Error: {str(reply_err)}", "Elsaidy WhatsApp Hub")
+			log_doc.status = "Failed"
+			log_doc.delivery_status = "Pending"
+			log_doc.error_message = str(reply_err)[:1000]
+			frappe.logger("whatsapp").error(f"WhatsApp Reply Send Error: {reply_err}")
 
 	# 7. Save Log
 	elapsed_ms = (time.time() - start_time) * 1000.0

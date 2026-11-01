@@ -207,8 +207,53 @@ test('peer retry receipts with fromMe=false or participant find stored outbound 
   const found2 = await h.fetchRetryMessage(peerKey2);
   assert.equal(found2?.message?.extendedTextMessage?.text, 'test reply');
 
-  // 3. Fallback by message ID
+  // 3. Fallback without conversation identity match is strictly blocked
   const peerKey3 = { id: 'RETRY-123', remoteJid: 'unknown@s.whatsapp.net', fromMe: false };
   const found3 = await h.fetchRetryMessage(peerKey3);
-  assert.equal(found3?.message?.extendedTextMessage?.text, 'test reply');
+  assert.equal(found3, null, 'Retry from unrelated JID must not obtain message from another conversation');
+});
+
+test('cross-conversation message disclosure is strictly blocked during retry', async t => {
+  const h = harness(t);
+  const aliceJid = '201000000001@s.whatsapp.net';
+  const aliceLid = '11111111111111@lid';
+  const bobJid = '201000000002@s.whatsapp.net';
+  const eveJid = '201000000003@s.whatsapp.net';
+  const eveLid = '33333333333333@lid';
+
+  h.recordMapping(aliceLid, aliceJid);
+
+  const aliceMsg = { key: { id: 'ALICE-SECRET-001', remoteJid: aliceLid, fromMe: true }, message: { conversation: 'secret for alice' } };
+  const bobMsg = { key: { id: 'BOB-SECRET-002', remoteJid: bobJid, fromMe: true }, message: { conversation: 'secret for bob' } };
+
+  h.storeMessage(aliceMsg.key.id, aliceMsg);
+  h.storeMessage(bobMsg.key.id, bobMsg);
+
+  // Alice can retrieve her own message via LID
+  const aliceRetLid = await h.fetchRetryMessage({ id: 'ALICE-SECRET-001', remoteJid: aliceLid, fromMe: false });
+  assert.equal(aliceRetLid?.message?.conversation, 'secret for alice');
+
+  // Alice can retrieve her own message via mapped PN
+  const aliceRetPn = await h.fetchRetryMessage({ id: 'ALICE-SECRET-001', remoteJid: aliceJid, fromMe: false });
+  assert.equal(aliceRetPn?.message?.conversation, 'secret for alice');
+
+  // Eve (unrelated third party) tries to fetch Alice's message ID using Eve's PN -> BLOCKED
+  const eveTryAlicePn = await h.fetchRetryMessage({ id: 'ALICE-SECRET-001', remoteJid: eveJid, fromMe: false });
+  assert.equal(eveTryAlicePn, null, 'Eve must not access Alice message via PN');
+
+  // Eve tries to fetch Alice's message ID using Eve's LID -> BLOCKED
+  const eveTryAliceLid = await h.fetchRetryMessage({ id: 'ALICE-SECRET-001', remoteJid: eveLid, fromMe: false });
+  assert.equal(eveTryAliceLid, null, 'Eve LID must not access Alice message');
+
+  // Bob tries to fetch Alice's message ID -> BLOCKED
+  const bobTryAlice = await h.fetchRetryMessage({ id: 'ALICE-SECRET-001', remoteJid: bobJid, fromMe: false });
+  assert.equal(bobTryAlice, null, 'Bob must not access Alice message');
+
+  // Bob can retrieve his own message
+  const bobRet = await h.fetchRetryMessage({ id: 'BOB-SECRET-002', remoteJid: bobJid, fromMe: false });
+  assert.equal(bobRet?.message?.conversation, 'secret for bob');
+
+  // Alice tries to fetch Bob's message ID -> BLOCKED
+  const aliceTryBob = await h.fetchRetryMessage({ id: 'BOB-SECRET-002', remoteJid: aliceJid, fromMe: false });
+  assert.equal(aliceTryBob, null, 'Alice must not access Bob message');
 });

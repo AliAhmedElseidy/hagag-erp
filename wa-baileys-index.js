@@ -135,7 +135,15 @@ const pnLidMap = new Map(); // Phone -> LID
 function ensureDirectories() {
   try {
     if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
-    if (!fs.existsSync(MESSAGE_CACHE_DIR)) fs.mkdirSync(MESSAGE_CACHE_DIR, { recursive: true });
+    if (!fs.existsSync(MESSAGE_CACHE_DIR)) {
+      fs.mkdirSync(MESSAGE_CACHE_DIR, { recursive: true });
+    } else {
+      for (const file of fs.readdirSync(MESSAGE_CACHE_DIR)) {
+        if (file.startsWith('id_') && file.endsWith('.json')) {
+          try { fs.unlinkSync(path.join(MESSAGE_CACHE_DIR, file)); } catch (_) {}
+        }
+      }
+    }
   } catch (err) {
     addLog('warn', `[Init] Error ensuring directories: ${err.message}`);
   }
@@ -204,14 +212,8 @@ function storeMessage(msgId, msgObj) {
   const cacheKey = messageCacheKey(msgObj?.key);
   if (!msgId || !cacheKey || !msgObj.message) return;
   messageStore.set(cacheKey, msgObj);
-  if (msgId) {
-    messageStore.set(`id:${msgId}`, msgObj);
-  }
   ensureDirectories();
   atomicJson(path.join(MESSAGE_CACHE_DIR, `${cacheKey}.json`), msgObj);
-  if (msgId && /^[A-Za-z0-9_-]+$/.test(msgId)) {
-    atomicJson(path.join(MESSAGE_CACHE_DIR, `id_${msgId}.json`), msgObj);
-  }
 }
 
 function fetchStoredMessage(key) {
@@ -227,42 +229,54 @@ function fetchStoredMessage(key) {
 }
 
 async function fetchRetryMessage(key, socket) {
-  if (!key?.id) return null;
-  let match = fetchStoredMessage(key);
-  if (match) return match;
-  match = fetchStoredMessage({ ...key, fromMe: !key.fromMe, participant: undefined });
-  if (match) return match;
-  if (key.participant) {
-    match = fetchStoredMessage({ ...key, participant: undefined });
-    if (match) return match;
-    match = fetchStoredMessage({ ...key, fromMe: !key.fromMe, participant: undefined });
-    if (match) return match;
+  if (!key?.id || !key?.remoteJid) return null;
+  const reqJid = canonicalJid(key.remoteJid);
+  if (!reqJid) return null;
+
+  // Build list of verified candidate remoteJids belonging to the exact same conversation
+  const conversationJids = [reqJid];
+  let alternate = reqJid.endsWith('@lid') ? (lidPnMap.get(reqJid) || lidPnMap.get(reqJid.split('@')[0])) : (pnLidMap.get(reqJid) || pnLidMap.get(reqJid.split('@')[0]));
+  if (alternate && !alternate.includes('@')) {
+    alternate = reqJid.endsWith('@lid') ? `${alternate}@s.whatsapp.net` : `${alternate}@lid`;
   }
-  const jid = canonicalJid(key?.remoteJid);
-  let alternate = jid.endsWith('@lid') ? lidPnMap.get(jid) : pnLidMap.get(jid);
-  if (alternate && !alternate.includes('@')) alternate += '@s.whatsapp.net';
   if (!alternate && socket?.signalRepository?.lidMapping) {
-    const mapping = socket.signalRepository.lidMapping;
-    alternate = jid.endsWith('@lid') ? await mapping.getPNForLID(jid) : await mapping.getLIDForPN(jid);
+    try {
+      const mapping = socket.signalRepository.lidMapping;
+      const res = reqJid.endsWith('@lid') ? await mapping.getPNForLID(reqJid) : await mapping.getLIDForPN(reqJid);
+      if (res) {
+        if (reqJid.endsWith('@lid')) {
+          recordMapping(reqJid, res);
+          alternate = res.includes('@') ? res : `${res}@s.whatsapp.net`;
+        } else {
+          recordMapping(res, reqJid);
+          alternate = res.includes('@') ? res : `${res}@lid`;
+        }
+      }
+    } catch (_) {}
   }
   if (alternate) {
-    match = fetchStoredMessage({ ...key, remoteJid: alternate });
-    if (match) return match;
-    match = fetchStoredMessage({ ...key, remoteJid: alternate, fromMe: !key.fromMe, participant: undefined });
-    if (match) return match;
+    conversationJids.push(canonicalJid(alternate));
   }
-  const idCached = messageStore.get(`id:${key.id}`);
-  if (idCached) return idCached;
-  try {
-    const idPath = path.join(MESSAGE_CACHE_DIR, `id_${key.id}.json`);
-    if (fs.existsSync(idPath)) {
-      const val = JSON.parse(fs.readFileSync(idPath, 'utf8'), BufferJSON.reviver);
-      if (val) {
-        messageStore.set(`id:${key.id}`, val);
-        return val;
+
+  // Check valid conversation variants across fromMe and participant dimensions
+  for (const cJid of conversationJids) {
+    const variants = [
+      { id: key.id, remoteJid: cJid, fromMe: key.fromMe, participant: key.participant },
+      { id: key.id, remoteJid: cJid, fromMe: !key.fromMe, participant: undefined },
+      { id: key.id, remoteJid: cJid, fromMe: key.fromMe, participant: undefined },
+      { id: key.id, remoteJid: cJid, fromMe: !key.fromMe, participant: key.participant }
+    ];
+    for (const v of variants) {
+      const match = fetchStoredMessage(v);
+      if (match?.message) {
+        // Enforce strict conversation matching: candidate message must belong to the requested conversation
+        if (match.key?.id === key.id && sameConversation(reqJid, match.key.remoteJid, lidPnMap)) {
+          return match;
+        }
       }
     }
-  } catch (_) {}
+  }
+
   return null;
 }
 

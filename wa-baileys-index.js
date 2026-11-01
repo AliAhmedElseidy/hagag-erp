@@ -97,13 +97,8 @@ const healCooldownMap = new Map();
 const MAX_HEAL_ATTEMPTS = 3;
 const HEAL_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
-// Known / learned LID <-> Phone Number mapping
-const lidPnMap = new Map([
-  ['251036744843464', '201028632620'],
-  ['251036744843464@lid', '201028632620'],
-  ['88949594783992', '966569589664'],
-  ['88949594783992@lid', '966569589664']
-]);
+// Dynamic LID <-> Phone Number mapping (learned at runtime from WhatsApp stanzas & Frappe contacts)
+const lidPnMap = new Map();
 
 // ─── Utility Functions ────────────────────────────────────────────────────────
 function normalizeNumber(number) {
@@ -262,28 +257,6 @@ async function healTargetSession(targetId) {
       addLog('warn', `[SessionHeal] Could not clear signalCache: ${cErr.message}`);
     }
 
-    // Note: Do not force assertSessions on incoming heal because that creates a pending outbound prekey
-    // that conflicts with the sender's incoming prekey handshake.
-    let asserted = false;
-    if (sock && currentState === EngineState.CONNECTED) {
-      try {
-        let assertJid = cleanId;
-        if (!assertJid.includes('@')) {
-          assertJid = signalUser.length > 13 ? `${signalUser}@lid` : `${signalUser}@s.whatsapp.net`;
-        }
-        if (typeof sock.assertSessions === 'function') {
-          await Promise.race([
-            sock.assertSessions([assertJid], true),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('assertSessions timeout')), 4000))
-          ]);
-          asserted = true;
-          addLog('info', `[SessionHeal] Successfully asserted fresh prekeys for: ${assertJid}`);
-        }
-      } catch (assertErr) {
-        addLog('warn', `[SessionHeal] assertSessions call returned: ${assertErr.message}`);
-      }
-    }
-
     // Update cooldown
     healCooldownMap.set(targetId, {
       count: history.count + 1,
@@ -295,8 +268,8 @@ async function healTargetSession(targetId) {
       target: targetId,
       deleted_files_count: deletedCount,
       deleted_files: deletedFiles,
-      session_reasserted: asserted,
-      message: `تم إصلاح وتطهير الجلسة بنجاح للمعرف (${targetId}). الملفات المعالجة: ${deletedCount}.`
+      session_reasserted: false,
+      message: `تم تطهير ملفات وكاش الجلسة بأمان للمعرف (${targetId}). الملفات المعالجة: ${deletedCount}.`
     };
 
   } catch (err) {
@@ -427,22 +400,18 @@ async function initBaileysSocket(reason = 'Startup') {
             continue;
           }
 
-          // Drop multi-device companion sync messages from primary phone
+          // Dynamically drop companion sync messages from the bot's own primary device
           const remoteUser = (remoteJid || '').split('@')[0].split(':')[0];
-          if (remoteUser === '201028632620' || remoteUser === '251036744843464') {
-            continue;
+          const myPhone = (connectedPhone || state?.creds?.me?.id || '').split('@')[0].split(':')[0];
+          const myLid = (state?.creds?.me?.lid || '').split('@')[0].split(':')[0];
+          if ((myPhone && remoteUser === myPhone) || (myLid && remoteUser === myLid)) {
+            continue; // Drop internal multi-device peer sync messages
           }
 
           if (!msg.message) {
             const stubType = msg.messageStubType;
             const stubParams = msg.messageStubParameters;
             addLog('warn', `[MsgUndecrypted] Message ${msgId} from ${remoteJid} could not be decrypted | StubType: ${stubType} | Params: ${JSON.stringify(stubParams)}`);
-            
-            // Auto-heal session for this remoteJid if stuck on stale ratchet
-            if (remoteUser && !remoteJid.includes('@broadcast') && !remoteJid.includes('@newsletter')) {
-              addLog('info', `[AutoHeal] Triggering targeted heal for ${remoteJid} to reset desynced ratchet...`);
-              healTargetSession(remoteJid);
-            }
             continue;
           }
 
@@ -555,12 +524,33 @@ async function initBaileysSocket(reason = 'Startup') {
       });
 
       // ── Message Updates ─────────────────────────────────────────────────────
-      sock.ev.on('messages.update', (updates) => {
+      sock.ev.on('messages.update', async (updates) => {
         for (const update of updates) {
           if (update.update?.status) {
             const statusNames = { 1: 'PENDING', 2: 'SERVER_ACK', 3: 'DELIVERY_ACK', 4: 'READ', 5: 'PLAYED' };
             const statusName = statusNames[update.update.status] || update.update.status;
             addLog('info', `[MsgStatus] MsgID: ${update.key?.id} | To: ${update.key?.remoteJid} | Status: ${statusName} (${update.update.status})`);
+
+            // Forward delivery receipt status to Frappe webhook
+            try {
+              fetch(FRAPPE_WEBHOOK_URL, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Host': FRAPPE_HOST,
+                  'X-Frappe-Site-Name': FRAPPE_HOST,
+                  'X-Api-Token': API_TOKEN
+                },
+                body: JSON.stringify({
+                  event_type: 'status_update',
+                  message_id: update.key?.id,
+                  remote_jid: update.key?.remoteJid,
+                  status_code: update.update.status,
+                  status_name: statusName
+                }),
+                signal: AbortSignal.timeout(5000)
+              }).catch(() => {});
+            } catch (_) {}
           }
           if (update.key.id && update.update.message) {
             messageStore.set(update.key.id, { key: update.key, message: update.update.message });
@@ -810,6 +800,26 @@ app.post('/heal-sessions', async (req, res) => {
   const result = await healTargetSession(target);
   const httpCode = result.status === 'ok' ? 200 : (result.status === 'cooldown' ? 429 : 500);
   res.status(httpCode).json(result);
+});
+
+// POST /sync-contact-mapping (Dynamic LID <-> Phone mapping from Frappe)
+app.post('/sync-contact-mapping', (req, res) => {
+  if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { mappings } = req.body;
+  let count = 0;
+  if (Array.isArray(mappings)) {
+    for (const m of mappings) {
+      if (m.lid && m.phone) {
+        const cleanLid = String(m.lid).trim().replace('@lid', '');
+        const cleanPn = normalizeNumber(m.phone);
+        lidPnMap.set(cleanLid, cleanPn);
+        lidPnMap.set(`${cleanLid}@lid`, cleanPn);
+        count++;
+      }
+    }
+  }
+  res.json({ status: 'ok', mapped_count: count });
 });
 
 // GET /groups

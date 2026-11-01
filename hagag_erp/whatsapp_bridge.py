@@ -102,7 +102,7 @@ def get_hub_status_internal(hub_doc=None) -> dict:
 	)
 	bot_phone = res.get("bot_phone") or ""
 
-	if hub:
+	if hub and (hub.connection_status != conn_status or hub.connected_phone != bot_phone):
 		frappe.db.set_value("Elsaidy WhatsApp Hub", None, {
 			"connection_status": conn_status,
 			"connected_phone": bot_phone,
@@ -231,9 +231,23 @@ def call_ai_api(user_message: str, provider: str, api_key: str, model: str, syst
 	if not api_key or not model:
 		return generate_local_fallback_reply(user_message, "لم يتم تكوين مفتاح الذكاء الاصطناعي")
 
+	clean_model = (model or "").strip()
+	if provider == "Gemini":
+		# Normalize model identifier if user typed display name
+		model_map = {
+			"gemini 3.5 flash lite": "gemini-2.5-flash",
+			"gemini 3.8 flash": "gemini-2.5-flash",
+			"gemini 2.5 flash": "gemini-2.5-flash",
+			"gemini-flash": "gemini-2.5-flash",
+			"gemini flash": "gemini-2.5-flash"
+		}
+		clean_model = model_map.get(clean_model.lower(), clean_model)
+		if not clean_model:
+			clean_model = "gemini-2.5-flash"
+
 	try:
 		if provider == "Gemini":
-			url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+			url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={api_key}"
 			payload = {
 				"contents": [
 					{"role": "user", "parts": [{"text": user_message}]}
@@ -273,7 +287,7 @@ def call_ai_api(user_message: str, provider: str, api_key: str, model: str, syst
 				"Content-Type": "application/json"
 			}
 			payload = {
-				"model": model,
+				"model": clean_model or "gpt-4o-mini",
 				"messages": [
 					{"role": "system", "content": system_prompt or "أنت المساعد الذكي لشركة الصعيدي للمقاولات."},
 					{"role": "user", "content": user_message}
@@ -421,12 +435,11 @@ def send_baileys_reply(jid: str, text: str, quoted_msg_id: str = None) -> dict:
 @frappe.whitelist(allow_guest=True)
 def receive_baileys_event():
 	"""
-	Core Webhook Endpoint invoked by Baileys Node.js container on 'messages.upsert'.
-	Enforces:
-	1. API Token Authentication.
-	2. Strict Idempotency on 'message_id'.
-	3. Rule Verification for Direct Chat and Groups.
-	4. Bot Mode Routing (AI + Accounting Hybrid / Accounting Only / AI Only / Disabled).
+	Core Webhook Endpoint invoked by Baileys Node.js container:
+	1. Real-time delivery status updates ('status_update' / 'messages.update').
+	2. Inbound messages ('message' / 'messages.upsert').
+	3. Dynamic Identity Resolution & Auto-Learning (LID <-> Phone).
+	4. Human Takeover Check (suppress bot auto-reply when human takeover active).
 	5. ZATCA Tax Engine Integration (strictly Draft docstatus=0).
 	6. Quoted WhatsApp response with ERPNext direct URL.
 	7. Logging into 'Elsaidy WhatsApp Log'.
@@ -460,8 +473,32 @@ def receive_baileys_event():
 		payload = {}
 
 	event_type = payload.get("event_type") or payload.get("event")
+
+	# ── 1.1 Handle Delivery Status Updates ────────────────────────────────────
+	if event_type in ("status_update", "messages.update"):
+		msg_id = payload.get("message_id")
+		raw_status = payload.get("status")
+		status_map = {
+			1: "Pending",
+			2: "Sent",
+			3: "Delivered",
+			4: "Read"
+		}
+		delivery_status = status_map.get(raw_status, "Sent")
+		if msg_id:
+			try:
+				frappe.db.sql("""
+					UPDATE `tabElsaidy WhatsApp Log`
+					SET delivery_status = %s
+					WHERE message_id = %s
+				""", (delivery_status, msg_id))
+				frappe.db.commit()
+			except Exception as upd_err:
+				frappe.logger("whatsapp").warn(f"Failed to update delivery status: {upd_err}")
+		return {"status": "ok", "event_type": "status_update", "message_id": msg_id, "delivery_status": delivery_status}
+
 	if event_type not in ("message", "messages.upsert"):
-		return {"status": "ignored", "reason": "Not a message event"}
+		return {"status": "ignored", "reason": f"Unhandled event type: {event_type}"}
 
 	data = payload if payload.get("message_id") else payload.get("data", payload)
 
@@ -479,14 +516,6 @@ def receive_baileys_event():
 	has_media = bool(data.get("has_media"))
 	remote_jid = data.get("remote_jid") or ""
 	reply_jid = remote_jid or data.get("reply_jid") or (group_jid if is_group else (f"{sender_phone}@s.whatsapp.net" if sender_phone else sender_jid))
-
-	# LID resolution: if sender_phone is empty and LID matches owner/contact
-	if not sender_phone and (sender_jid or sender_lid or remote_jid):
-		lid_str = sender_lid or sender_jid or remote_jid
-		if "88949594783992" in lid_str or "966569589664" in lid_str:
-			sender_phone = "966569589664"
-		elif "251036744843464" in lid_str:
-			sender_phone = "201028632620"
 
 	# 2. Read Bot Mode & AI Settings
 	bot_mode = (hub.bot_mode if hub and hub.bot_mode else "AI + Accounting Hybrid")
@@ -526,12 +555,15 @@ def receive_baileys_event():
 	log_doc.direction = "Incoming"
 	log_doc.sender_phone = sender_phone
 	log_doc.sender_name = sender_name
+	log_doc.sender_lid = sender_lid
 	log_doc.is_group = 1 if is_group else 0
 	log_doc.group_jid = group_jid
+	log_doc.reply_jid = reply_jid
 	log_doc.message_text = text
 	log_doc.status = "Received"
+	log_doc.delivery_status = "Delivered"
 
-	# 4. Access Control Verification
+	# 4. Access Control Verification & Dynamic Identity Resolution
 	target_project = None
 	target_cost_center = hub.default_cost_center if hub else None
 	target_custody_account = None
@@ -564,26 +596,33 @@ def receive_baileys_event():
 				frappe.db.commit()
 				return {"status": "ignored", "reason": "Unregistered group"}
 	else:
+		# Dynamic Contact Matching without hardcoded rules
 		matching_contacts = []
 		if hub:
 			for c in hub.allowed_direct_contacts:
 				if not c.is_active:
 					continue
 				c_norm = normalize_phone_number(c.phone_number)
-				# 1. Match by phone number
+				c_lid = getattr(c, "whatsapp_lid", "") or ""
+
+				# 1. Match by WhatsApp Cloud LID
+				if c_lid and sender_lid and (c_lid in sender_lid or sender_lid in c_lid):
+					matching_contacts.append(c)
+					if not sender_phone and c_norm:
+						sender_phone = c_norm
+						log_doc.sender_phone = sender_phone
+					break
+
+				# 2. Match by Normalized Phone
 				if sender_phone and c_norm == sender_phone:
 					matching_contacts.append(c)
 					break
-				# 2. Match by JID / Phone in JID
-				if sender_jid and (c_norm in sender_jid or c.phone_number in sender_jid):
+
+				# 3. Match by JID match
+				if sender_jid and (c_norm in sender_jid or (c.phone_number and c.phone_number in sender_jid)):
 					matching_contacts.append(c)
-					break
-				# 3. Match known owner LID
-				lid_ctx = sender_lid or sender_jid or remote_jid or ""
-				if ("88949594783992" in lid_ctx or "966569589664" in lid_ctx or "251036744843464" in lid_ctx) and c_norm == "966569589664":
-					matching_contacts.append(c)
-					if not sender_phone:
-						sender_phone = "966569589664"
+					if not sender_phone and c_norm:
+						sender_phone = c_norm
 						log_doc.sender_phone = sender_phone
 					break
 
@@ -592,6 +631,20 @@ def receive_baileys_event():
 			target_project = contact_rule.default_project
 			target_cost_center = contact_rule.default_cost_center or target_cost_center
 			target_custody_account = contact_rule.default_custody_account
+
+			# DYNAMIC AUTO-LEARNING: If contact matched by phone and contact rule has no LID, auto-save sender_lid!
+			c_lid = getattr(contact_rule, "whatsapp_lid", "") or ""
+			if sender_lid and not c_lid:
+				try:
+					frappe.db.set_value("Elsaidy WhatsApp Contact Rule", contact_rule.name, "whatsapp_lid", sender_lid, update_modified=False)
+					frappe.db.commit()
+					# Push mapping to Baileys engine
+					call_baileys_api("sync-contact-mapping", method="POST", data={
+						"mappings": [{"lid": sender_lid, "phone": normalize_phone_number(contact_rule.phone_number)}]
+					})
+				except Exception as map_err:
+					frappe.logger("whatsapp").warn(f"Failed to auto-save LID to contact rule: {map_err}")
+
 		else:
 			if not (hub and hub.allow_unregistered_direct):
 				unregistered_msg = hub.unregistered_auto_reply if (hub and hub.unregistered_auto_reply) else (
@@ -602,10 +655,32 @@ def receive_baileys_event():
 
 				log_doc.status = "Ignored"
 				log_doc.reply_text = unregistered_msg
-				log_doc.error_message = f"Unregistered direct sender: {sender_phone or sender_jid}"
+				log_doc.error_message = f"Unregistered direct sender: {sender_phone or sender_jid or sender_lid}"
 				log_doc.insert(ignore_permissions=True)
 				frappe.db.commit()
 				return {"status": "rejected", "reason": "Unregistered contact"}
+
+	# ── 4.1 Check Human Takeover Active ───────────────────────────────────────
+	is_takeover = False
+	if sender_phone:
+		try:
+			is_takeover = bool(frappe.cache().get_value(f"wa_takeover_{sender_phone}"))
+		except Exception:
+			is_takeover = False
+
+	if is_takeover:
+		log_doc.extracted_intent = "Human Takeover Active"
+		log_doc.status = "Received"
+		log_doc.reply_text = None
+		log_doc.insert(ignore_permissions=True)
+		frappe.db.commit()
+		return {
+			"status": "ok",
+			"message_id": msg_id,
+			"human_takeover": True,
+			"log": log_doc.name,
+			"message": "Message logged. Automated reply suppressed (Human takeover mode active)."
+		}
 
 	# ── 5. Intent Detection & Routing ─────────────────────────────────────────
 	reply_content = None
@@ -653,7 +728,7 @@ def receive_baileys_event():
 				if not (expense_account and vat_account and credit_account):
 					raise ValueError("لم يتم تهيئة الحسابات المحاسبية المطلوبة (مصاريف/ضريبة/صندوق) بعد.")
 
-				# Create Draft Journal Entry
+				# Create Draft Journal Entry (docstatus=0 strictly)
 				je_lines = [
 					{
 						"account": expense_account,
@@ -766,6 +841,7 @@ def receive_baileys_event():
 		try:
 			send_baileys_reply(reply_jid, reply_content, quoted_msg_id=msg_id)
 			log_doc.status = "Replied"
+			log_doc.delivery_status = "Sent"
 		except Exception as reply_err:
 			frappe.log_error(f"WhatsApp Reply Send Error: {str(reply_err)}", "Elsaidy WhatsApp Hub")
 
@@ -786,14 +862,14 @@ def receive_baileys_event():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# GUI Whitelisted Management Endpoints & AI Simulator
+# GUI Whitelisted Management Endpoints, Telemetry & Message Center
 # ──────────────────────────────────────────────────────────────────────────────
 
 @frappe.whitelist()
 def get_dashboard_telemetry() -> dict:
 	"""
 	Aggregates real-time telemetry from Baileys engine and ERPNext MariaDB logs.
-	Powers the main Enterprise Dashboard cards.
+	Strictly read-only during polling to prevent database locks.
 	"""
 	hub = get_hub_settings()
 	health_data = call_baileys_api("health", method="GET", hub_doc=hub)
@@ -822,15 +898,18 @@ def get_dashboard_telemetry() -> dict:
 	connected_phone = health_data.get("phone") or status_data.get("bot_phone") or (hub.connected_phone if hub else None)
 	engine_state = health_data.get("engine_state") or status_data.get("engine_state") or ("CONNECTED" if is_connected else "DISCONNECTED")
 
-	# Auto-sync Hub document connection state in MariaDB
+	# Safe auto-sync Hub state only when change is detected
 	new_db_status = "Connected" if is_connected else ("Connecting" if engine_state == "CONNECTING" else "Disconnected")
 	if hub and (hub.connection_status != new_db_status or (connected_phone and hub.connected_phone != connected_phone)):
-		frappe.db.set_value("Elsaidy WhatsApp Hub", None, {
-			"connection_status": new_db_status,
-			"connected_phone": connected_phone or hub.connected_phone or "",
-			"last_sync_time": now_datetime()
-		}, update_modified=False)
-		frappe.db.commit()
+		try:
+			frappe.db.set_value("Elsaidy WhatsApp Hub", None, {
+				"connection_status": new_db_status,
+				"connected_phone": connected_phone or hub.connected_phone or "",
+				"last_sync_time": now_datetime()
+			}, update_modified=False)
+			frappe.db.commit()
+		except Exception:
+			pass
 
 	return {
 		"status": "ok",
@@ -848,6 +927,310 @@ def get_dashboard_telemetry() -> dict:
 			"ai_replies": cint(db_metrics.get("ai_replies_today", 0)),
 			"expenses_processed": cint(db_metrics.get("expenses_today", 0)),
 			"failed": cint(db_metrics.get("failed_today", 0))
+		}
+	}
+
+
+@frappe.whitelist()
+def get_message_center_conversations(search: str = "", limit: int = 25, page: int = 1) -> dict:
+	"""
+	Fetches aggregated conversation threads for the Enterprise Message Center Inbox.
+	"""
+	limit = min(cint(limit) or 25, 100)
+	offset = (max(cint(page), 1) - 1) * limit
+	
+	search_clause = ""
+	args = []
+	if search:
+		search_term = f"%{search}%"
+		search_clause = "WHERE (sender_phone LIKE %s OR receiver_phone LIKE %s OR sender_name LIKE %s OR message_text LIKE %s OR group_name LIKE %s)"
+		args.extend([search_term, search_term, search_term, search_term, search_term])
+	
+	sql = f"""
+		SELECT 
+			name, message_id, direction, sender_phone, receiver_phone, sender_name,
+			is_group, group_jid, group_name, status, delivery_status, extracted_intent,
+			message_text, reply_text, creation,
+			CASE 
+				WHEN is_group = 1 THEN group_jid
+				WHEN direction = 'Incoming' AND sender_phone IS NOT NULL AND sender_phone != '' THEN sender_phone
+				WHEN direction = 'Outgoing' AND receiver_phone IS NOT NULL AND receiver_phone != '' THEN receiver_phone
+				ELSE COALESCE(NULLIF(sender_phone, ''), NULLIF(receiver_phone, ''), sender_name, 'Unknown')
+			END AS conv_partner
+		FROM `tabElsaidy WhatsApp Log`
+		{search_clause}
+		ORDER BY creation DESC
+	"""
+	logs = frappe.db.sql(sql, tuple(args), as_dict=True)
+	
+	conversations = {}
+	hub = get_hub_settings()
+	contact_rules_map = {}
+	if hub:
+		for c in hub.allowed_direct_contacts:
+			norm = normalize_phone_number(c.phone_number)
+			if norm:
+				contact_rules_map[norm] = c
+	
+	for row in logs:
+		partner = row.conv_partner
+		if not partner or partner == 'Unknown':
+			continue
+		if partner not in conversations:
+			is_takeover = False
+			if not row.is_group:
+				try:
+					is_takeover = bool(frappe.cache().get_value(f"wa_takeover_{partner}"))
+				except Exception:
+					is_takeover = False
+			
+			contact_name = row.sender_name or partner
+			if partner in contact_rules_map:
+				contact_name = contact_rules_map[partner].contact_name
+			elif row.is_group and row.group_name:
+				contact_name = row.group_name
+			
+			conversations[partner] = {
+				"partner_id": partner,
+				"contact_name": contact_name,
+				"is_group": bool(row.is_group),
+				"group_name": row.group_name or "",
+				"last_message": row.message_text or row.reply_text or "",
+				"last_time": str(row.creation),
+				"last_direction": row.direction,
+				"last_status": row.status,
+				"delivery_status": row.delivery_status or "Sent",
+				"human_takeover": is_takeover,
+				"message_count": 0
+			}
+		conversations[partner]["message_count"] += 1
+	
+	conv_list = list(conversations.values())
+	total = len(conv_list)
+	paged_list = conv_list[offset:offset + limit]
+	
+	return {
+		"status": "ok",
+		"total": total,
+		"page": page,
+		"conversations": paged_list
+	}
+
+
+@frappe.whitelist()
+def get_conversation_thread(target_id: str, limit: int = 50) -> dict:
+	"""
+	Fetches the chronological message thread for a given contact phone or group JID.
+	"""
+	clean_id = (target_id or "").strip()
+	if not clean_id:
+		return {"status": "error", "message": "Target ID required"}
+	
+	limit = min(cint(limit) or 50, 150)
+	norm = normalize_phone_number(clean_id)
+	
+	logs = frappe.db.sql("""
+		SELECT 
+			name, message_id, direction, sender_phone, receiver_phone, sender_name,
+			is_group, group_jid, group_name, status, delivery_status, extracted_intent,
+			linked_document_type, linked_document_name, execution_time_ms,
+			message_text, reply_text, creation
+		FROM `tabElsaidy WhatsApp Log`
+		WHERE sender_phone = %s 
+		   OR receiver_phone = %s 
+		   OR group_jid = %s
+		   OR (sender_phone = %s AND %s != '')
+		   OR (receiver_phone = %s AND %s != '')
+		ORDER BY creation ASC
+		LIMIT %s
+	""", (clean_id, clean_id, clean_id, norm, norm, norm, norm, limit), as_dict=True)
+	
+	is_takeover = False
+	try:
+		is_takeover = bool(frappe.cache().get_value(f"wa_takeover_{norm or clean_id}"))
+	except Exception:
+		is_takeover = False
+	
+	return {
+		"status": "ok",
+		"target_id": clean_id,
+		"human_takeover": is_takeover,
+		"messages": logs
+	}
+
+
+@frappe.whitelist()
+def send_conversation_reply(target_id: str, message: str, quoted_msg_id: str = None) -> dict:
+	"""
+	Sends an outbound reply in the Message Center conversation thread.
+	"""
+	if not frappe.has_permission("Elsaidy WhatsApp Hub", "write"):
+		frappe.throw(_("ليس لديك صلاحية لتنفيذ هذا الإجراء."))
+	
+	clean_target = (target_id or "").strip()
+	text = (message or "").strip()
+	if not clean_target or not text:
+		frappe.throw(_("الهدف والرسالة كلاهما مطلوب."))
+	
+	hub = get_hub_settings()
+	bot_phone = normalize_phone_number(hub.connected_phone or hub.bot_phone_number or "")
+	norm_target = normalize_phone_number(clean_target)
+	
+	# Safety checks
+	if bot_phone and norm_target and (bot_phone == norm_target or norm_target.endswith(bot_phone)):
+		frappe.throw(_("لا يمكن الإرسال إلى رقم البوت نفسه."))
+	
+	is_group = clean_target.endswith("@g.us")
+	is_lid = clean_target.endswith("@lid")
+	jid = clean_target if (is_group or is_lid) else f"{norm_target}@s.whatsapp.net"
+	
+	payload = {
+		"jid": jid,
+		"message": text,
+		"quoted_message_id": quoted_msg_id
+	}
+	res = call_baileys_api("send-message", method="POST", data=payload)
+	
+	if res.get("status") == "ok":
+		log_doc = frappe.new_doc("Elsaidy WhatsApp Log")
+		log_doc.message_id = res.get("msg_id") or f"HUB-OUT-{frappe.generate_hash(length=8)}"
+		log_doc.direction = "Outgoing"
+		log_doc.sender_phone = bot_phone
+		log_doc.receiver_phone = norm_target
+		log_doc.receiver_jid = jid
+		log_doc.reply_jid = jid
+		log_doc.message_text = text
+		log_doc.status = "Replied"
+		log_doc.delivery_status = "Sent"
+		log_doc.extracted_intent = "Human Direct Reply"
+		log_doc.insert(ignore_permissions=True)
+		frappe.db.commit()
+		return {"status": "ok", "msg_id": log_doc.message_id, "log": log_doc.name}
+	
+	return res
+
+
+@frappe.whitelist()
+def toggle_human_takeover(phone_number: str, enabled: int = 1, duration_minutes: int = 120) -> dict:
+	"""
+	Enables or disables Human Takeover mode for a phone number.
+	When enabled, automated bot responses are suspended for this conversation.
+	"""
+	if not frappe.has_permission("Elsaidy WhatsApp Hub", "write"):
+		frappe.throw(_("ليس لديك صلاحية لتنفيذ هذا الإجراء."))
+	
+	clean_phone = normalize_phone_number(phone_number)
+	if not clean_phone:
+		frappe.throw(_("رقم الهاتف غير صالح."))
+	
+	cache_key = f"wa_takeover_{clean_phone}"
+	enabled_bool = bool(cint(enabled))
+	
+	if enabled_bool:
+		duration_sec = max(cint(duration_minutes), 5) * 60
+		frappe.cache().set_value(cache_key, 1, expires_in_sec=duration_sec)
+		msg = f"تم تفعيل وضع التدخل البشري للرقم {clean_phone} لمدة {duration_minutes} دقيقة. البوت لن يرد تلقائياً."
+	else:
+		frappe.cache().delete_value(cache_key)
+		msg = f"تم إلغاء وضع التدخل البشري للرقم {clean_phone}. البوت سيعود للرد التلقائي."
+	
+	return {
+		"status": "ok",
+		"phone_number": clean_phone,
+		"human_takeover": enabled_bool,
+		"message": msg
+	}
+
+
+@frappe.whitelist()
+def test_ai_configuration(prompt: str = None) -> dict:
+	"""
+	Tests the configured AI engine with real round-trip latency measurement.
+	"""
+	if not frappe.has_permission("Elsaidy WhatsApp Hub", "write"):
+		frappe.throw(_("ليس لديك صلاحية لتنفيذ هذا الإجراء."))
+	
+	hub = get_hub_settings()
+	provider = hub.ai_provider if hub else "Gemini"
+	model = hub.ai_model if hub else "gemini-2.5-flash"
+	test_prompt = prompt or "السلام عليكم، ما هي الخدمات والمشاريع التي تقدمها شركة الصعيدي؟"
+	
+	ai_api_key = None
+	if hub and hasattr(hub, "get_password"):
+		try:
+			ai_api_key = hub.get_password("ai_api_key", raise_exception=False) or None
+		except Exception:
+			ai_api_key = None
+	
+	system_prompt = hub.ai_system_prompt if hub else "أنت المساعد الذكي لشركة الصعيدي للمقاولات."
+	
+	t0 = time.time()
+	reply = call_ai_api(
+		user_message=test_prompt,
+		provider=provider,
+		api_key=ai_api_key,
+		model=model,
+		system_prompt=system_prompt
+	)
+	latency_ms = round((time.time() - t0) * 1000.0, 2)
+	
+	return {
+		"status": "ok",
+		"provider": provider,
+		"model": model,
+		"prompt": test_prompt,
+		"reply": reply,
+		"latency_ms": latency_ms,
+		"has_api_key": bool(ai_api_key)
+	}
+
+
+@frappe.whitelist()
+def get_system_health_report() -> dict:
+	"""
+	Generates comprehensive system health status covering Docker, Baileys, Database, and Webhook.
+	"""
+	hub = get_hub_settings()
+	baileys_health = call_baileys_api("health", method="GET", hub_doc=hub)
+	baileys_status = call_baileys_api("status", method="GET", hub_doc=hub)
+	
+	# DB checks
+	try:
+		db_ok = True
+		log_count = frappe.db.count("Elsaidy WhatsApp Log")
+		contact_count = len(hub.allowed_direct_contacts) if hub else 0
+		group_count = len(hub.allowed_groups) if hub else 0
+	except Exception:
+		db_ok = False
+		log_count = 0
+		contact_count = 0
+		group_count = 0
+	
+	return {
+		"status": "ok",
+		"timestamp": str(now_datetime()),
+		"baileys": {
+			"reachable": baileys_health.get("status") == "ok",
+			"engine_state": baileys_status.get("engine_state") or baileys_health.get("engine_state") or "UNKNOWN",
+			"connected": bool(baileys_status.get("connected") or baileys_health.get("connected")),
+			"phone": baileys_status.get("bot_phone") or baileys_health.get("phone") or "",
+			"bot_name": baileys_status.get("bot_name") or baileys_health.get("bot_name") or "",
+			"uptime_seconds": baileys_status.get("uptime_seconds") or baileys_health.get("uptime_seconds") or 0,
+			"memory_mb": baileys_health.get("memory_mb") or {},
+			"version": baileys_health.get("version") or "3.2.0-enterprise"
+		},
+		"erpnext": {
+			"db_connected": db_ok,
+			"site": "erp.local",
+			"hub_connection_status": hub.connection_status if hub else "Unknown",
+			"total_logs": log_count,
+			"active_contacts": contact_count,
+			"active_groups": group_count,
+			"bot_mode": hub.bot_mode if hub else "Unknown",
+			"auto_reply_enabled": bool(hub.auto_reply_enabled if hub else False),
+			"enable_ai_reply": bool(hub.enable_ai_reply if hub else False),
+			"ai_provider": hub.ai_provider if hub else "Gemini",
+			"ai_model": hub.ai_model if hub else "gemini-2.5-flash"
 		}
 	}
 
@@ -948,8 +1331,11 @@ def send_test_whatsapp_message(recipient: str, message: str) -> dict:
 		log_doc.sender_phone = bot_phone
 		log_doc.receiver_phone = norm_recipient
 		log_doc.receiver_jid = jid
+		log_doc.reply_jid = jid
 		log_doc.message_text = message
 		log_doc.status = "Replied"
+		log_doc.delivery_status = "Sent"
+		log_doc.extracted_intent = "Manual Test Message"
 		log_doc.insert(ignore_permissions=True)
 		frappe.db.commit()
 

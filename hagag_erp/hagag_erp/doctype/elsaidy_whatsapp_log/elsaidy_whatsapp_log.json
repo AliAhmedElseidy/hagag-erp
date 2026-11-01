@@ -10,11 +10,16 @@
   "direction",
   "sender_phone",
   "sender_name",
+  "sender_lid",
   "is_group",
   "group_jid",
   "group_name",
   "column_break_log",
   "status",
+  "delivery_status",
+  "receiver_phone",
+  "receiver_jid",
+  "reply_jid",
   "extracted_intent",
   "linked_document_type",
   "linked_document_name",
@@ -62,6 +67,11 @@
    "label": "اسم المرسل"
   },
   {
+   "fieldname": "sender_lid",
+   "fieldtype": "Data",
+   "label": "معرف المرسل السحابي (LID)"
+  },
+  {
    "default": "0",
    "fieldname": "is_group",
    "fieldtype": "Check",
@@ -89,6 +99,29 @@
    "in_list_view": 1,
    "label": "الحالة",
    "options": "Received\nProcessed\nReplied\nIgnored\nFailed"
+  },
+  {
+   "default": "Sent",
+   "fieldname": "delivery_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "حالة تسليم واتساب",
+   "options": "Pending\nSent\nDelivered\nRead\nFailed"
+  },
+  {
+   "fieldname": "receiver_phone",
+   "fieldtype": "Data",
+   "label": "رقم المستلم"
+  },
+  {
+   "fieldname": "receiver_jid",
+   "fieldtype": "Data",
+   "label": "معرف المستلم (JID)"
+  },
+  {
+   "fieldname": "reply_jid",
+   "fieldtype": "Data",
+   "label": "وجهة الرد (Reply JID)"
   },
   {
    "fieldname": "extracted_intent",
@@ -135,7 +168,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-10-31 23:00:00.000000",
+ "modified": "2026-11-01 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Hagag ERP",
  "name": "Elsaidy WhatsApp Log",

@@ -8,7 +8,7 @@ from decimal import Decimal
 import requests
 import frappe
 from frappe import _
-from frappe.utils import now_datetime, cint, flt
+from frappe.utils import now_datetime, cint, flt, today
 
 ARABIC_TO_ASCII_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
 
@@ -70,9 +70,9 @@ def call_baileys_api(endpoint: str, method: str = "GET", data: dict = None, hub_
 
 	try:
 		if method.upper() == "POST":
-			resp = requests.post(url, json=data or {}, headers=headers, timeout=15)
+			resp = requests.post(url, json=data or {}, headers=headers, timeout=20)
 		else:
-			resp = requests.get(url, headers=headers, timeout=15)
+			resp = requests.get(url, headers=headers, timeout=20)
 
 		try:
 			return resp.json()
@@ -212,16 +212,16 @@ def logout_baileys_internal(hub_doc=None) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# AI Reply Engine
+# AI Provider Engine & Local Fallback
 # ──────────────────────────────────────────────────────────────────────────────
 
 def call_ai_api(user_message: str, provider: str, api_key: str, model: str, system_prompt: str) -> str:
 	"""
-	Calls an AI provider API (Gemini or OpenAI-compatible) and returns the response text.
-	Falls back to an Arabic error message if the call fails.
+	Calls AI API (Gemini or OpenAI-compatible) with strict error isolation and timeout.
+	Falls back to local intelligent response if the provider is unavailable.
 	"""
 	if not api_key or not model:
-		return "عذراً، لم يتم تهيئة مفتاح الذكاء الاصطناعي. تواصل مع مدير النظام."
+		return generate_local_fallback_reply(user_message, "لم يتم تكوين مفتاح الذكاء الاصطناعي")
 
 	try:
 		if provider == "Gemini":
@@ -234,7 +234,7 @@ def call_ai_api(user_message: str, provider: str, api_key: str, model: str, syst
 					"parts": [{"text": system_prompt or "أنت المساعد الذكي لشركة الصعيدي للمقاولات."}]
 				},
 				"generationConfig": {
-					"maxOutputTokens": 512,
+					"maxOutputTokens": 600,
 					"temperature": 0.7
 				}
 			}
@@ -244,17 +244,18 @@ def call_ai_api(user_message: str, provider: str, api_key: str, model: str, syst
 			if resp.status_code != 200:
 				err = data.get("error", {}).get("message", str(resp.status_code))
 				frappe.log_error(f"Gemini API Error: {err}", "Elsaidy WhatsApp Hub AI")
-				return f"عذراً، حدث خطأ في الذكاء الاصطناعي. [{err[:60]}]"
+				return generate_local_fallback_reply(user_message, f"خطأ في الاتصال بالنموذج [{err[:40]}]")
 
 			candidates = data.get("candidates", [])
 			if not candidates:
-				return "عذراً، لم أتمكن من معالجة طلبك. حاول مرة أخرى."
+				return generate_local_fallback_reply(user_message, "لم يقدم النموذج رداً")
 
 			return (
 				candidates[0]
 				.get("content", {})
 				.get("parts", [{}])[0]
-				.get("text", "عذراً، لم أفهم طلبك. حاول مرة أخرى.")
+				.get("text", "")
+				.strip()
 			)
 
 		elif provider in ("OpenAI", "Custom API"):
@@ -266,10 +267,10 @@ def call_ai_api(user_message: str, provider: str, api_key: str, model: str, syst
 			payload = {
 				"model": model,
 				"messages": [
-					{"role": "system", "content": system_prompt or "أنت مساعد ذكي محترف."},
+					{"role": "system", "content": system_prompt or "أنت المساعد الذكي لشركة الصعيدي للمقاولات."},
 					{"role": "user", "content": user_message}
 				],
-				"max_tokens": 512,
+				"max_tokens": 600,
 				"temperature": 0.7
 			}
 			resp = requests.post(url, json=payload, headers=headers, timeout=25)
@@ -278,88 +279,68 @@ def call_ai_api(user_message: str, provider: str, api_key: str, model: str, syst
 			if resp.status_code != 200:
 				err = data.get("error", {}).get("message", str(resp.status_code))
 				frappe.log_error(f"OpenAI API Error: {err}", "Elsaidy WhatsApp Hub AI")
-				return f"عذراً، حدث خطأ في الذكاء الاصطناعي. [{err[:60]}]"
+				return generate_local_fallback_reply(user_message, f"خطأ في الاتصال [{err[:40]}]")
 
-			return data["choices"][0]["message"]["content"]
+			return data["choices"][0]["message"]["content"].strip()
 
 		else:
-			return "مزود الذكاء الاصطناعي غير معروف. تواصل مع مدير النظام."
+			return generate_local_fallback_reply(user_message, f"المزود {provider} غير مدعوم")
 
 	except requests.Timeout:
-		frappe.log_error("AI API Timeout", "Elsaidy WhatsApp Hub AI")
-		return "عذراً، انتهت مهلة الرد من الذكاء الاصطناعي. حاول مرة أخرى."
+		frappe.log_error("AI API Timeout (>25s)", "Elsaidy WhatsApp Hub AI")
+		return generate_local_fallback_reply(user_message, "تجاوز مهلة الاستجابة")
 	except Exception as e:
 		frappe.log_error(f"AI API Exception: {str(e)}", "Elsaidy WhatsApp Hub AI")
-		return f"عذراً، حدث خطأ في معالجة طلبك. [{str(e)[:50]}]"
+		return generate_local_fallback_reply(user_message, str(e))
+
+
+def generate_local_fallback_reply(user_message: str, error_context: str = "") -> str:
+	"""
+	Local Rule-Based Fallback Engine.
+	Guarantees that WhatsApp never fails to respond even if external AI APIs are down.
+	"""
+	norm = user_message.translate(ARABIC_TO_ASCII_DIGITS).lower()
+
+	if any(kw in norm for kw in ["رصيد", "ميزانية", "فلوس", "عهدة"]):
+		return (
+			"💰 *المساعد المالي لشركة الصعيدي*\n"
+			"━━━━━━━━━━━━━━━━━━━\n"
+			"يمكنك معرفة رصيد عهدتك بكتابة:\n"
+			"👉 *رصيد العهدة*\n"
+			"وسيقوم النظام بالاستعلام المباشر من القيود المحاسبية."
+		)
+
+	if any(kw in norm for kw in ["صرف", "دفع", "شراء", "فاتورة"]):
+		return (
+			"📝 *تسجيل المصاريف اليومية*\n"
+			"━━━━━━━━━━━━━━━━━━━\n"
+			"أرسل المصروف بالصيغة:\n"
+			"👉 *صرفت 500 ريال [البيان] لمشروع [اسم المشروع]*\n"
+			"وسيتكفل النظام بحساب ضريبة القيمة المضافة 15% وإنشاء القيد كمسودة."
+		)
+
+	return (
+		"مرحباً بك في *منظومة الصعيدي الذكية* 🏗️\n"
+		"أنا المساعد الآلي لخدمتكم. يمكنك إرسال:\n"
+		"• تسجيل المصاريف: _صرفت 300 ريال ديزل لموقع الرياض_\n"
+		"• الاستعلام عن الرصيد: _رصيد العهدة_\n"
+		"وسأقوم بخدمتك على الفور."
+	)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Whitelisted API Endpoints
+# Natural Language Parsing (ZATCA & ERP)
 # ──────────────────────────────────────────────────────────────────────────────
-
-@frappe.whitelist()
-def send_test_whatsapp_message(recipient: str, message: str) -> dict:
-	"""Whitelisted helper to send test message from Frappe GUI."""
-	clean_recipient = recipient.strip()
-	is_group = clean_recipient.endswith("@g.us")
-	jid = clean_recipient if is_group else f"{normalize_phone_number(clean_recipient)}@s.whatsapp.net"
-
-	payload = {
-		"jid": jid,
-		"message": message
-	}
-	return call_baileys_api("send-message", method="POST", data=payload)
-
-
-@frappe.whitelist()
-def wipe_baileys_session() -> dict:
-	"""
-	Whitelisted endpoint to trigger a hard session wipe on the Baileys container.
-	Useful when recovering from Bad MAC / libsignal decrypt errors / 401 states.
-	"""
-	hub = get_hub_settings()
-	result = call_baileys_api("wipe-session", method="POST", hub_doc=hub)
-
-	# Update hub status to Disconnected after wipe
-	try:
-		frappe.db.set_value("Elsaidy WhatsApp Hub", None, {
-			"connection_status": "Disconnected",
-			"connected_phone": None,
-			"last_sync_time": now_datetime()
-		}, update_modified=False)
-		frappe.db.commit()
-	except Exception:
-		pass
-
-	return result
-
-
-@frappe.whitelist()
-def get_baileys_logs(limit: int = 100) -> dict:
-	"""
-	Whitelisted endpoint to fetch the in-memory log ring buffer from Baileys.
-	Returns up to 100 recent log entries (newest first).
-	"""
-	hub = get_hub_settings()
-	clean_limit = min(cint(limit) or 100, 100)
-	result = call_baileys_api(f"logs?limit={clean_limit}", method="GET", hub_doc=hub)
-	return result
-
 
 def parse_expense_from_text(text: str) -> dict:
 	"""
 	Parses Arabic natural language expense messages for amount, VAT inclusiveness, description, and vendor.
-	Examples:
-	- 'صرفت 500 ريال وقود محطة الأمانة'
-	- 'دفعت مبلغ مقداره 1200 ريال أجرة نقل من شركة المحمدية'
-	- 'اشتريت خردة 350 ريال لمشروع الرياض'
 	"""
 	if not text:
 		return None
 
 	normalized_text = text.translate(ARABIC_TO_ASCII_DIGITS)
 
-	# Keywords indicating an expense / purchase
 	expense_keywords = ["صرف", "دفع", "اشتر", "أشتري", "أشتر", "سدد", "سدّد", "صُرف", "مصاريف", "مدفوع", "اشتريت", "دفعت", "صرفت", "فاتورة"]
 	has_keyword = any(kw in normalized_text for kw in expense_keywords)
 	if not has_keyword:
@@ -378,14 +359,14 @@ def parse_expense_from_text(text: str) -> dict:
 	except Exception:
 		return None
 
-	# Determine VAT inclusion
+	# VAT inclusion determination
 	is_inclusive = True
 	if "قبل الضريبة" in normalized_text or "بدون ضريبة" in normalized_text or "غير شامل" in normalized_text:
 		is_inclusive = False
 	elif "شامل" in normalized_text or "مع الضريبة" in normalized_text:
 		is_inclusive = True
 
-	# Extract vendor / supplier if present ("من شركة ...", "من محطة ...", "من مورد ...")
+	# Extract vendor if present
 	vendor = None
 	vendor_match = re.search(r"من\s+(شركة|محطة|مورد|مشروع|متجر|محل)?\s*([^\n\.,]+)", normalized_text)
 	if vendor_match:
@@ -410,19 +391,22 @@ def send_baileys_reply(jid: str, text: str, quoted_msg_id: str = None) -> dict:
 	return call_baileys_api("send-message", method="POST", data=payload)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Core Webhook Endpoint
+# ──────────────────────────────────────────────────────────────────────────────
+
 @frappe.whitelist(allow_guest=True)
 def receive_baileys_event():
 	"""
 	Core Webhook Endpoint invoked by Baileys Node.js container on 'messages.upsert'.
 	Enforces:
 	1. API Token Authentication.
-	2. Idempotency on 'msg_id' (operation_id = f"WA-{msg_id}").
+	2. Strict Idempotency on 'message_id'.
 	3. Rule Verification for Direct Chat and Groups.
-	4. Bot Mode Routing: AI + Accounting Hybrid / Accounting Only / AI Only / Disabled.
+	4. Bot Mode Routing (AI + Accounting Hybrid / Accounting Only / AI Only / Disabled).
 	5. ZATCA Tax Engine Integration (strictly Draft docstatus=0).
-	6. AI Reply via Gemini / OpenAI if enabled.
-	7. Quoted WhatsApp response with ERPNext direct URL.
-	8. Comprehensive logging into 'Elsaidy WhatsApp Log'.
+	6. Quoted WhatsApp response with ERPNext direct URL.
+	7. Logging into 'Elsaidy WhatsApp Log'.
 	"""
 	start_time = time.time()
 	req = frappe.request
@@ -444,12 +428,10 @@ def receive_baileys_event():
 	except Exception:
 		payload = {}
 
-	# Support both direct payload (from new index.js) and nested payload
 	event_type = payload.get("event_type") or payload.get("event")
 	if event_type not in ("message", "messages.upsert"):
 		return {"status": "ignored", "reason": "Not a message event"}
 
-	# Support both flat payload (new) and nested data (old)
 	data = payload if payload.get("message_id") else payload.get("data", payload)
 
 	msg_id = data.get("message_id") or data.get("msg_id")
@@ -464,10 +446,7 @@ def receive_baileys_event():
 	text = (data.get("text") or "").strip()
 	has_media = bool(data.get("has_media"))
 	remote_jid = data.get("remote_jid") or ""
-
-	# Re-derive group_jid if missing
-	if is_group and not group_jid:
-		group_jid = remote_jid
+	reply_jid = data.get("reply_jid") or (group_jid if is_group else (f"{sender_phone}@s.whatsapp.net" if sender_phone else sender_jid))
 
 	# 2. Read Bot Mode & AI Settings
 	bot_mode = (hub.bot_mode if hub and hub.bot_mode else "AI + Accounting Hybrid")
@@ -483,7 +462,7 @@ def receive_baileys_event():
 	ai_system_prompt = (
 		hub.ai_system_prompt
 		if hub and hub.ai_system_prompt
-		else "أنت المساعد الذكي لشركة الصعيدي للمقاولات. ترد باللغة العربية بأسلوب مهني محترم."
+		else "أنت المساعد الذكي لشركة الصعيدي للمقاولات."
 	)
 
 	# 3. Strict Idempotency Check (WA-{msg_id})
@@ -500,7 +479,7 @@ def receive_baileys_event():
 			"linked_doc": f"{existing_log.linked_document_type} - {existing_log.linked_document_name}"
 		}
 
-	# Create/prepare log entry
+	# Create Log Doc
 	log_doc = frappe.new_doc("Elsaidy WhatsApp Log")
 	log_doc.message_id = msg_id
 	log_doc.direction = "Incoming"
@@ -511,10 +490,7 @@ def receive_baileys_event():
 	log_doc.message_text = text
 	log_doc.status = "Received"
 
-	# Target JID for replies
-	reply_jid = group_jid if is_group else (f"{sender_phone}@s.whatsapp.net" if sender_phone else sender_jid)
-
-	# 4. Access Control & Permission Rules Verification
+	# 4. Access Control Verification
 	target_project = None
 	target_cost_center = hub.default_cost_center if hub else None
 	target_custody_account = None
@@ -523,7 +499,6 @@ def receive_baileys_event():
 	group_rule = None
 
 	if is_group:
-		# Group Rule Check
 		matching_groups = [r for r in hub.allowed_groups if r.group_jid == group_jid and r.is_active] if hub else []
 		if matching_groups:
 			group_rule = matching_groups[0]
@@ -548,7 +523,6 @@ def receive_baileys_event():
 				frappe.db.commit()
 				return {"status": "ignored", "reason": "Unregistered group"}
 	else:
-		# Direct 1-to-1 Rule Check
 		matching_contacts = [
 			c for c in hub.allowed_direct_contacts
 			if c.is_active and normalize_phone_number(c.phone_number) == sender_phone
@@ -574,11 +548,10 @@ def receive_baileys_event():
 				frappe.db.commit()
 				return {"status": "rejected", "reason": "Unregistered contact"}
 
-	# ── 5. Intent Detection & Bot Mode Routing ────────────────────────────────
+	# ── 5. Intent Detection & Routing ─────────────────────────────────────────
 	reply_content = None
 	created_doc = None
 
-	# Short-circuit: if bot is disabled, just log
 	if bot_mode == "Disabled / Log Only":
 		log_doc.extracted_intent = "Disabled Mode - Log Only"
 		log_doc.status = "Ignored"
@@ -588,11 +561,10 @@ def receive_baileys_event():
 
 	parsed_expense = parse_expense_from_text(text)
 
-	# ── ZATCA Expense Path ────────────────────────────────────────────────────
+	# ZATCA Expense Path
 	if parsed_expense and bot_mode != "AI Assistant Only":
 		log_doc.extracted_intent = "Expense Record"
 
-		# Verify permission
 		if contact_rule and not contact_rule.can_record_expenses:
 			reply_content = "⛔ ليس لديك صلاحية تسجيل المصاريف عبر واتساب من هذا الرقم."
 		else:
@@ -622,7 +594,7 @@ def receive_baileys_event():
 				if not (expense_account and vat_account and credit_account):
 					raise ValueError("لم يتم تهيئة الحسابات المحاسبية المطلوبة (مصاريف/ضريبة/صندوق) بعد.")
 
-				# Create balanced Draft Journal Entry (docstatus = 0)
+				# Create Draft Journal Entry
 				je_lines = [
 					{
 						"account": expense_account,
@@ -685,7 +657,7 @@ def receive_baileys_event():
 				log_doc.status = "Failed"
 				reply_content = f"⚠️ حدث خطأ في تسجيل المصروف: {str(je_exc)}"
 
-	# ── AI Reply Path ─────────────────────────────────────────────────────────
+	# AI Reply Path
 	elif enable_ai and ai_api_key and bot_mode != "Accounting Commands Only":
 		log_doc.extracted_intent = "AI Chat Reply"
 		try:
@@ -700,16 +672,15 @@ def receive_baileys_event():
 		except Exception as ai_err:
 			frappe.log_error(f"AI Reply Error: {str(ai_err)}", "Elsaidy WhatsApp Hub")
 			log_doc.status = "Failed"
-			reply_content = f"عذراً، حدث خطأ في الذكاء الاصطناعي. [{str(ai_err)[:50]}]"
+			reply_content = generate_local_fallback_reply(text, str(ai_err))
 
-	# ── Balance Inquiry Path (fallback before generic help) ───────────────────
+	# Balance Inquiry or Generic Help Path
 	else:
 		log_doc.extracted_intent = "Inquiry / Chat"
 		inquiry_keywords = ["رصيد", "الرصيد", "الميزانية", "ميزان", "كم في"]
 		is_inquiry = any(kw in text for kw in inquiry_keywords)
 
 		if is_inquiry and (not contact_rule or contact_rule.can_request_balance):
-			# Query custody account balance
 			if target_custody_account:
 				balance = frappe.db.sql("""
 					SELECT SUM(debit - credit) as balance
@@ -729,18 +700,9 @@ def receive_baileys_event():
 			else:
 				reply_content = "لا يوجد حساب عهدة مرتبط برقمك. تواصل مع المحاسب لإعداد الحساب."
 		else:
-			# Generic help message when no AI and no match
-			help_mode_note = ""
-			if bot_mode == "Accounting Commands Only":
-				help_mode_note = "\n_(البوت يعمل حالياً في وضع الأوامر المحاسبية فقط)_"
-			reply_content = (
-				f"مرحباً {sender_name or ''} في *Elsaidy WhatsApp Hub* 👋\n"
-				f"يمكنني مساعدتك في تسجيل المصاريف مباشرةً. أرسل مثلاً:\n"
-				f"مثال: _صرفت 500 ريال وقود محطة الأمانة للمشروع_\n"
-				f"وسيتم تسجيل القيد فوراً مع احتساب ضريبة ZATCA تلقائياً.{help_mode_note}"
-			)
+			reply_content = generate_local_fallback_reply(text)
 
-	# ── 6. Send Quoted WhatsApp Reply ─────────────────────────────────────────
+	# 6. Send Quoted WhatsApp Reply
 	if reply_content and hub and hub.auto_reply_enabled:
 		try:
 			send_baileys_reply(reply_jid, reply_content, quoted_msg_id=msg_id)
@@ -762,3 +724,201 @@ def receive_baileys_event():
 		"linked_doc": created_doc.name if created_doc else None,
 		"execution_time_ms": log_doc.execution_time_ms
 	}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GUI Whitelisted Management Endpoints & AI Simulator
+# ──────────────────────────────────────────────────────────────────────────────
+
+@frappe.whitelist()
+def get_dashboard_telemetry() -> dict:
+	"""
+	Aggregates real-time telemetry from Baileys engine and ERPNext MariaDB logs.
+	Powers the main Enterprise Dashboard cards.
+	"""
+	hub = get_hub_settings()
+	health_data = call_baileys_api("health", method="GET", hub_doc=hub)
+	status_data = call_baileys_api("status", method="GET", hub_doc=hub)
+
+	today_date = today()
+
+	# DB Metrics for today
+	try:
+		stats = frappe.db.sql("""
+			SELECT 
+				COUNT(*) as total_today,
+				SUM(CASE WHEN direction = 'Incoming' THEN 1 ELSE 0 END) as incoming_today,
+				SUM(CASE WHEN status = 'Replied' THEN 1 ELSE 0 END) as replied_today,
+				SUM(CASE WHEN extracted_intent = 'AI Chat Reply' THEN 1 ELSE 0 END) as ai_replies_today,
+				SUM(CASE WHEN extracted_intent = 'Expense Record' AND status = 'Processed' THEN 1 ELSE 0 END) as expenses_today,
+				SUM(CASE WHEN status = 'Failed' THEN 1 ELSE 0 END) as failed_today
+			FROM `tabElsaidy WhatsApp Log`
+			WHERE DATE(creation) = %s
+		""", (today_date,), as_dict=True)
+		db_metrics = stats[0] if stats else {}
+	except Exception:
+		db_metrics = {}
+
+	return {
+		"status": "ok",
+		"engine_state": health_data.get("engine_state") or status_data.get("engine_state") or ("CONNECTED" if health_data.get("connected") else "DISCONNECTED"),
+		"whatsapp_connected": bool(health_data.get("connected") or status_data.get("connected")),
+		"connected_phone": health_data.get("phone") or status_data.get("bot_phone") or (hub.connected_phone if hub else None),
+		"bot_name": health_data.get("bot_name") or status_data.get("bot_name") or "Elsaidy WhatsApp Hub",
+		"has_qr": bool(health_data.get("has_qr") or status_data.get("has_qr")),
+		"uptime_seconds": health_data.get("uptime_seconds") or status_data.get("uptime_seconds") or 0,
+		"memory_mb": health_data.get("memory_mb") or {},
+		"version": health_data.get("version") or "3.2.0-enterprise",
+		"today_metrics": {
+			"incoming": cint(db_metrics.get("incoming_today", 0)),
+			"replied": cint(db_metrics.get("replied_today", 0)),
+			"ai_replies": cint(db_metrics.get("ai_replies_today", 0)),
+			"expenses_processed": cint(db_metrics.get("expenses_today", 0)),
+			"failed": cint(db_metrics.get("failed_today", 0))
+		}
+	}
+
+
+@frappe.whitelist()
+def heal_baileys_session(target: str) -> dict:
+	"""
+	Whitelisted endpoint to trigger targeted Bad MAC / decrypt session repair.
+	Never wipes creds.json or all keys.
+	"""
+	if not frappe.has_permission("Elsaidy WhatsApp Hub", "write"):
+		frappe.throw(_("ليس لديك صلاحية لتنفيذ هذا الإجراء."))
+
+	clean_target = (target or "").strip()
+	if not clean_target:
+		frappe.throw(_("يجب تحديد رقم الهاتف أو JID المستهدف للإصلاح."))
+
+	hub = get_hub_settings()
+	return call_baileys_api("heal-sessions", method="POST", data={"target": clean_target}, hub_doc=hub)
+
+
+@frappe.whitelist()
+def wipe_baileys_session() -> dict:
+	"""Whitelisted endpoint to trigger a hard session wipe."""
+	if not frappe.has_permission("Elsaidy WhatsApp Hub", "write"):
+		frappe.throw(_("ليس لديك صلاحية لتنفيذ هذا الإجراء."))
+
+	hub = get_hub_settings()
+	res = call_baileys_api("wipe-session", method="POST", hub_doc=hub)
+	try:
+		frappe.db.set_value("Elsaidy WhatsApp Hub", None, {
+			"connection_status": "Disconnected",
+			"connected_phone": None,
+			"last_sync_time": now_datetime()
+		}, update_modified=False)
+		frappe.db.commit()
+	except Exception:
+		pass
+	return res
+
+
+@frappe.whitelist()
+def get_baileys_logs(limit: int = 100, level: str = "", search: str = "") -> dict:
+	"""Fetches the in-memory log ring buffer from Baileys with filtering."""
+	hub = get_hub_settings()
+	clean_limit = min(cint(limit) or 100, 200)
+	query_params = f"limit={clean_limit}"
+	if level:
+		query_params += f"&level={level}"
+	if search:
+		query_params += f"&search={requests.utils.quote(search)}"
+
+	return call_baileys_api(f"logs?{query_params}", method="GET", hub_doc=hub)
+
+
+@frappe.whitelist()
+def simulate_whatsapp_message(text: str, sender_phone: str = "966569589664") -> dict:
+	"""
+	AI & Natural Language Simulator (Dry Run Mode).
+	Evaluates a message without committing any documents to the database.
+	Returns:
+	- Detected Intent
+	- Extracted Data (ZATCA amounts, VAT 15%, vendor, project)
+	- Simulated Journal Entry Preview
+	- Simulated AI Reply
+	"""
+	hub = get_hub_settings()
+	clean_text = (text or "").strip()
+	if not clean_text:
+		return {"status": "error", "message": "نص الرسالة مطلوب للمحاكاة"}
+
+	bot_mode = (hub.bot_mode if hub and hub.bot_mode else "AI + Accounting Hybrid")
+	enable_ai = cint(hub.enable_ai_reply if hub else 0)
+	ai_provider = (hub.ai_provider if hub and hub.ai_provider else "Gemini")
+	ai_model = (hub.ai_model if hub and hub.ai_model else "gemini-2.5-flash")
+	ai_api_key = hub.get_password("ai_api_key") if hub else None
+	ai_system_prompt = hub.ai_system_prompt if hub else "أنت المساعد المالي لمنظومة الصعيدي."
+
+	parsed_expense = parse_expense_from_text(clean_text)
+
+	if parsed_expense and bot_mode != "AI Assistant Only":
+		from hagag_erp.tax_engine import calculate_zatca_tax
+		tax_calc = calculate_zatca_tax(parsed_expense["amount"], is_inclusive=parsed_expense["is_inclusive"])
+
+		simulated_lines = [
+			{"account": hub.default_expense_account or "مصاريف عامة", "debit": float(tax_calc["net_amount"]), "credit": 0.0},
+			{"account": hub.default_vat_account or "ضريبة القيمة المضافة 15%", "debit": float(tax_calc["tax_amount"]), "credit": 0.0},
+			{"account": "صندوق النقدية / العهدة", "debit": 0.0, "credit": float(tax_calc["total_amount"])}
+		]
+
+		simulated_reply = (
+			f"✅ *تم تسجيل المصروف بنجاح (محاكاة تجريبية - Dry Run) ✅*\n"
+			f"━━━━━━━━━━━━━━━━━━━\n"
+			f"🔖 *رقم القيد المقترح:* `JV-SIMULATED-0001`\n"
+			f"💵 *المبلغ الصافي:* {tax_calc['net_amount']:,.2f} ر.س\n"
+			f"🏛️ *ضريبة القيمة المضافة (15%):* {tax_calc['tax_amount']:,.2f} ر.س\n"
+			f"💰 *المجموع الإجمالي:* {tax_calc['total_amount']:,.2f} ر.س\n"
+			f"👤 *المسجّل:* {sender_phone}\n"
+			f"━━━━━━━━━━━━━━━━━━━\n"
+			f"💡 *حالة العملية:* محاكاة ناجحة 100% دون تسجيل في قاعدة البيانات."
+		)
+
+		return {
+			"status": "ok",
+			"mode": "Dry Run Simulation",
+			"detected_intent": "Expense Record (ZATCA 15%)",
+			"parsed_entities": {
+				"amount": float(parsed_expense["amount"]),
+				"net_amount": float(tax_calc["net_amount"]),
+				"tax_amount": float(tax_calc["tax_amount"]),
+				"total_amount": float(tax_calc["total_amount"]),
+				"is_inclusive": parsed_expense["is_inclusive"],
+				"vendor": parsed_expense["vendor"] or "غير محدد"
+			},
+			"simulated_document": {
+				"doctype": "Journal Entry",
+				"docstatus": 0,
+				"lines": simulated_lines
+			},
+			"simulated_reply": simulated_reply
+		}
+
+	elif enable_ai and ai_api_key and bot_mode != "Accounting Commands Only":
+		simulated_ai_reply = call_ai_api(
+			user_message=clean_text,
+			provider=ai_provider,
+			api_key=ai_api_key,
+			model=ai_model,
+			system_prompt=ai_system_prompt
+		)
+		return {
+			"status": "ok",
+			"mode": "Dry Run Simulation",
+			"detected_intent": f"AI Chat ({ai_provider} - {ai_model})",
+			"parsed_entities": {},
+			"simulated_reply": simulated_ai_reply
+		}
+
+	else:
+		fallback_reply = generate_local_fallback_reply(clean_text)
+		return {
+			"status": "ok",
+			"mode": "Dry Run Simulation",
+			"detected_intent": "General Chat / Local Fallback",
+			"parsed_entities": {},
+			"simulated_reply": fallback_reply
+		}

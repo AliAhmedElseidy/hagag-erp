@@ -14,6 +14,7 @@ from hagag_erp.whatsapp_bridge import (
 	logout_baileys_internal
 )
 
+
 class ElsaidyWhatsAppHub(Document):
 	def validate(self):
 		if self.bot_phone_number:
@@ -29,7 +30,7 @@ class ElsaidyWhatsAppHub(Document):
 	def request_pairing(self, phone=None):
 		phone = phone or self.bot_phone_number
 		if not phone:
-			frappe.throw("يرجى إدخال رقم هاتف البوت أولاً لطلب كود الربط.")
+			frappe.throw("الرجاء إدخال رقم الهاتف أولاً لطلب رمز الإقران.")
 		return request_pairing_code_internal(self, phone)
 
 	@frappe.whitelist()

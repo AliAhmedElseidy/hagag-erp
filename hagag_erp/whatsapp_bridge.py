@@ -390,9 +390,24 @@ def parse_expense_from_text(text: str) -> dict:
 
 
 def send_baileys_reply(jid: str, text: str, quoted_msg_id: str = None) -> dict:
-	"""Helper to send reply via Baileys API."""
+	"""Helper to send reply via Baileys API with strict destination validation."""
+	clean_jid = (jid or "").strip()
+	if not clean_jid:
+		return {"status": "error", "reason": "Empty JID for reply"}
+
+	# CRITICAL GUARD: Never reply to broadcast or newsletter
+	if "@newsletter" in clean_jid or "@broadcast" in clean_jid or clean_jid == "status@broadcast":
+		frappe.logger("whatsapp").warn(f"[SendBlocked] Refusing to reply to broadcast/newsletter: {clean_jid}")
+		return {"status": "ignored", "reason": "Cannot reply to newsletter/broadcast"}
+
+	hub = get_hub_settings()
+	bot_phone = normalize_phone_number(hub.connected_phone or hub.bot_phone_number or "")
+	if bot_phone and (bot_phone in clean_jid or clean_jid.startswith(bot_phone)):
+		frappe.logger("whatsapp").warn(f"[SendBlocked] Refusing to reply to bot's own number: {clean_jid}")
+		return {"status": "ignored", "reason": "Cannot reply to bot itself"}
+
 	payload = {
-		"jid": jid,
+		"jid": clean_jid,
 		"message": text,
 		"quoted_message_id": quoted_msg_id
 	}
@@ -457,12 +472,19 @@ def receive_baileys_event():
 	is_group = bool(data.get("is_group"))
 	group_jid = data.get("remote_jid") if is_group else data.get("group_jid", "")
 	sender_jid = data.get("sender_jid") or ""
+	sender_lid = data.get("sender_lid") or ""
 	sender_phone = normalize_phone_number(data.get("sender_phone") or "")
 	sender_name = data.get("push_name") or data.get("sender_name") or ""
 	text = (data.get("text") or "").strip()
 	has_media = bool(data.get("has_media"))
 	remote_jid = data.get("remote_jid") or ""
-	reply_jid = data.get("reply_jid") or (group_jid if is_group else (f"{sender_phone}@s.whatsapp.net" if sender_phone else sender_jid))
+	reply_jid = remote_jid or data.get("reply_jid") or (group_jid if is_group else (f"{sender_phone}@s.whatsapp.net" if sender_phone else sender_jid))
+
+	# LID resolution: if sender_phone is empty and LID matches owner/contact
+	if not sender_phone and (sender_jid or sender_lid or remote_jid):
+		lid_str = sender_lid or sender_jid or remote_jid
+		if "251036744843464" in lid_str:
+			sender_phone = "966569589664"
 
 	# 2. Read Bot Mode & AI Settings
 	bot_mode = (hub.bot_mode if hub and hub.bot_mode else "AI + Accounting Hybrid")
@@ -540,10 +562,27 @@ def receive_baileys_event():
 				frappe.db.commit()
 				return {"status": "ignored", "reason": "Unregistered group"}
 	else:
-		matching_contacts = [
-			c for c in hub.allowed_direct_contacts
-			if c.is_active and normalize_phone_number(c.phone_number) == sender_phone
-		] if hub else []
+		matching_contacts = []
+		if hub:
+			for c in hub.allowed_direct_contacts:
+				if not c.is_active:
+					continue
+				c_norm = normalize_phone_number(c.phone_number)
+				# 1. Match by phone number
+				if sender_phone and c_norm == sender_phone:
+					matching_contacts.append(c)
+					break
+				# 2. Match by JID / Phone in JID
+				if sender_jid and (c_norm in sender_jid or c.phone_number in sender_jid):
+					matching_contacts.append(c)
+					break
+				# 3. Match known owner LID
+				if "251036744843464" in (sender_lid or sender_jid or remote_jid) and c_norm == "966569589664":
+					matching_contacts.append(c)
+					if not sender_phone:
+						sender_phone = "966569589664"
+						log_doc.sender_phone = sender_phone
+					break
 
 		if matching_contacts:
 			contact_rule = matching_contacts[0]
@@ -560,7 +599,7 @@ def receive_baileys_event():
 
 				log_doc.status = "Ignored"
 				log_doc.reply_text = unregistered_msg
-				log_doc.error_message = f"Unregistered direct sender: {sender_phone}"
+				log_doc.error_message = f"Unregistered direct sender: {sender_phone or sender_jid}"
 				log_doc.insert(ignore_permissions=True)
 				frappe.db.commit()
 				return {"status": "rejected", "reason": "Unregistered contact"}
@@ -864,15 +903,54 @@ def get_baileys_logs(limit: int = 100, level: str = "", search: str = "") -> dic
 @frappe.whitelist()
 def send_test_whatsapp_message(recipient: str, message: str) -> dict:
 	"""Whitelisted helper to send test message from Frappe GUI."""
-	clean_recipient = recipient.strip()
+	if not frappe.has_permission("Elsaidy WhatsApp Hub", "write"):
+		frappe.throw(_("ليس لديك صلاحية لتنفيذ هذا الإجراء."))
+
+	clean_recipient = (recipient or "").strip()
+	if not clean_recipient:
+		frappe.throw(_("الرجاء إدخال رقم هاتف المستلم الخارجي أو معرف المجموعة."))
+
+	hub = get_hub_settings()
+	bot_phone = normalize_phone_number(hub.connected_phone or hub.bot_phone_number or "")
+	norm_recipient = normalize_phone_number(clean_recipient)
+
+	# Safety: Block sending to bot's own number
+	if bot_phone and norm_recipient and (bot_phone == norm_recipient or norm_recipient.endswith(bot_phone) or bot_phone.endswith(norm_recipient)):
+		frappe.throw(_("⚠️ لا يمكن إرسال رسالة اختبارية إلى رقم البوت نفسه ({0}). الرجاء إدخال رقم هاتف خارجي للمعاينة.").format(bot_phone))
+
+	if "@newsletter" in clean_recipient or "@broadcast" in clean_recipient:
+		frappe.throw(_("غير مسموح بالإرسال إلى قنوات البث أو النشرات الإخبارية."))
+
 	is_group = clean_recipient.endswith("@g.us")
-	jid = clean_recipient if is_group else f"{normalize_phone_number(clean_recipient)}@s.whatsapp.net"
+	is_lid = clean_recipient.endswith("@lid")
+
+	if is_group or is_lid:
+		jid = clean_recipient
+	else:
+		if not norm_recipient:
+			frappe.throw(_("رقم الهاتف غير صالح."))
+		jid = f"{norm_recipient}@s.whatsapp.net"
 
 	payload = {
 		"jid": jid,
 		"message": message
 	}
-	return call_baileys_api("send-message", method="POST", data=payload)
+	res = call_baileys_api("send-message", method="POST", data=payload)
+
+	# Record in Elsaidy WhatsApp Log as Outgoing
+	if res.get("status") == "ok":
+		log_doc = frappe.new_doc("Elsaidy WhatsApp Log")
+		log_doc.message_id = res.get("msg_id") or f"TEST-{frappe.generate_hash(length=8)}"
+		log_doc.direction = "Outgoing"
+		log_doc.sender_phone = bot_phone
+		log_doc.receiver_phone = norm_recipient
+		log_doc.receiver_jid = jid
+		log_doc.message_text = message
+		log_doc.status = "Replied"
+		log_doc.insert(ignore_permissions=True)
+		frappe.db.commit()
+
+	return res
 
 
 @frappe.whitelist()

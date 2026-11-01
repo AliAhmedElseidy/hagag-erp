@@ -663,10 +663,10 @@ ${res.simulated_reply}
 				{
 					fieldname: 'recipient',
 					fieldtype: 'Data',
-					label: __('رقم الهاتف أو JID المجموعة'),
+					label: __('رقم هاتف المستلم الخارجي'),
 					reqd: 1,
-					default: frm.doc.connected_phone || '',
-					description: __('مثال: 01028632620 أو 966569589664 أو JID مجموعة')
+					default: '',
+					description: __('أدخل رقم الهاتف الخارجي الذي تريد تجربة الاستلام عليه (مثال: 966569589664 أو 010...). لا تدخل رقم البوت نفسه.')
 				},
 				{
 					fieldname: 'message',
@@ -678,6 +678,13 @@ ${res.simulated_reply}
 			],
 			primary_action_label: __('إرسال الرسالة'),
 			primary_action: function(values) {
+				const botPhone = (frm.doc.connected_phone || frm.doc.bot_phone_number || '').replace(/\D/g, '');
+				const inputPhone = (values.recipient || '').replace(/\D/g, '');
+				if (botPhone && inputPhone && (botPhone === inputPhone || inputPhone.endsWith(botPhone) || botPhone.endsWith(inputPhone))) {
+					frappe.msgprint(__('⚠️ تنبيه أمني: لقد أدخلت رقم هاتف البوت نفسه ({0})! الرجاء إدخال رقم هاتف هاتف خارجي للمعاينة.', [botPhone]));
+					return;
+				}
+
 				d.hide();
 				frappe.call({
 					method: 'hagag_erp.whatsapp_bridge.send_test_whatsapp_message',
@@ -686,13 +693,17 @@ ${res.simulated_reply}
 						message: values.message
 					},
 					freeze: true,
-					freeze_message: __('جاري إرسال الرسالة...'),
+					freeze_message: __('جاري إرسال الرسالة إلى {0}...', [values.recipient]),
 					callback: function(r) {
 						if (r.message && r.message.status === 'ok') {
-							frappe.show_alert({ message: __('✅ تم إرسال الرسالة بنجاح!'), indicator: 'green' });
+							frappe.show_alert({ 
+								message: __('✅ تم إرسال الرسالة بنجاح للمستلم! المعرف: {0}', [r.message.msg_id || '']), 
+								indicator: 'green' 
+							});
 							frm.trigger('render_dashboard_telemetry');
 						} else {
-							frappe.msgprint(__('فشل الإرسال: ' + (r.message ? r.message.error : 'لا يوجد رد')));
+							const errMsg = r.message ? (r.message.error || r.message.reason) : 'لا يوجد رد';
+							frappe.msgprint(__('❌ فشل الإرسال: {0}', [errMsg]));
 						}
 					}
 				});

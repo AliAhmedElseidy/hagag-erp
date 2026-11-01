@@ -59,7 +59,15 @@ def call_baileys_api(endpoint: str, method: str = "GET", data: dict = None, hub_
 	"""Executes HTTP request to local Baileys bridge container with Bearer token auth."""
 	hub = get_hub_settings(hub_doc)
 	base_url = (hub.baileys_url if hub and hub.baileys_url else "http://wa-baileys:3000").rstrip("/")
-	api_token = hub.get_password("api_token") if (hub and hasattr(hub, "get_password") and hub.get_password("api_token")) else "HAGAG_WA_7f3c9a2d6e4b8a1c"
+	
+	api_token = "HAGAG_WA_7f3c9a2d6e4b8a1c"
+	if hub and hasattr(hub, "get_password"):
+		try:
+			saved_token = hub.get_password("api_token", raise_exception=False)
+			if saved_token:
+				api_token = saved_token
+		except Exception:
+			pass
 
 	url = f"{base_url}/{endpoint.lstrip('/')}"
 	headers = {
@@ -415,7 +423,15 @@ def receive_baileys_event():
 	auth_header = req.headers.get("Authorization", "")
 	api_token_header = req.headers.get("x-api-token", "")
 	hub = get_hub_settings()
-	expected_token = hub.get_password("api_token") if (hub and hasattr(hub, "get_password") and hub.get_password("api_token")) else "HAGAG_WA_7f3c9a2d6e4b8a1c"
+	
+	expected_token = "HAGAG_WA_7f3c9a2d6e4b8a1c"
+	if hub and hasattr(hub, "get_password"):
+		try:
+			saved_token = hub.get_password("api_token", raise_exception=False)
+			if saved_token:
+				expected_token = saved_token
+		except Exception:
+			pass
 
 	is_authed = (auth_header == f"Bearer {expected_token}") or (api_token_header == expected_token)
 	if not is_authed:
@@ -453,11 +469,12 @@ def receive_baileys_event():
 	enable_ai = cint(hub.enable_ai_reply if hub else 0)
 	ai_provider = (hub.ai_provider if hub and hub.ai_provider else "Gemini")
 	ai_api_key = None
-	if hub and enable_ai:
+	if hub and enable_ai and hasattr(hub, "get_password"):
 		try:
-			ai_api_key = hub.get_password("ai_api_key") or None
+			ai_api_key = hub.get_password("ai_api_key", raise_exception=False) or None
 		except Exception:
 			ai_api_key = None
+
 	ai_model = (hub.ai_model if hub and hub.ai_model else "gemini-2.5-flash")
 	ai_system_prompt = (
 		hub.ai_system_prompt
@@ -831,15 +848,24 @@ def get_baileys_logs(limit: int = 100, level: str = "", search: str = "") -> dic
 
 
 @frappe.whitelist()
+def send_test_whatsapp_message(recipient: str, message: str) -> dict:
+	"""Whitelisted helper to send test message from Frappe GUI."""
+	clean_recipient = recipient.strip()
+	is_group = clean_recipient.endswith("@g.us")
+	jid = clean_recipient if is_group else f"{normalize_phone_number(clean_recipient)}@s.whatsapp.net"
+
+	payload = {
+		"jid": jid,
+		"message": message
+	}
+	return call_baileys_api("send-message", method="POST", data=payload)
+
+
+@frappe.whitelist()
 def simulate_whatsapp_message(text: str, sender_phone: str = "966569589664") -> dict:
 	"""
 	AI & Natural Language Simulator (Dry Run Mode).
 	Evaluates a message without committing any documents to the database.
-	Returns:
-	- Detected Intent
-	- Extracted Data (ZATCA amounts, VAT 15%, vendor, project)
-	- Simulated Journal Entry Preview
-	- Simulated AI Reply
 	"""
 	hub = get_hub_settings()
 	clean_text = (text or "").strip()
@@ -850,7 +876,14 @@ def simulate_whatsapp_message(text: str, sender_phone: str = "966569589664") -> 
 	enable_ai = cint(hub.enable_ai_reply if hub else 0)
 	ai_provider = (hub.ai_provider if hub and hub.ai_provider else "Gemini")
 	ai_model = (hub.ai_model if hub and hub.ai_model else "gemini-2.5-flash")
-	ai_api_key = hub.get_password("ai_api_key") if hub else None
+	
+	ai_api_key = None
+	if hub and hasattr(hub, "get_password"):
+		try:
+			ai_api_key = hub.get_password("ai_api_key", raise_exception=False) or None
+		except Exception:
+			ai_api_key = None
+
 	ai_system_prompt = hub.ai_system_prompt if hub else "أنت المساعد المالي لمنظومة الصعيدي."
 
 	parsed_expense = parse_expense_from_text(clean_text)

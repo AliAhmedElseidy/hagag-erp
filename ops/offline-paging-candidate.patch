@@ -1,0 +1,224 @@
+commit d5420c728350924649dbd4964925c430634dbdc0
+Author: aliahmedelsaidy <aliahmedelsaidy@gmail.com>
+Date:   Sun Nov 1 17:21:04 2026 +0300
+
+    fix(whatsapp): continue stalled offline batches without touching auth
+
+diff --git a/tests/wa-engine.test.mjs b/tests/wa-engine.test.mjs
+index ed8898a..4b2cecb 100644
+--- a/tests/wa-engine.test.mjs
++++ b/tests/wa-engine.test.mjs
+@@ -4,6 +4,7 @@ import fs from 'node:fs';
+ import os from 'node:os';
+ import path from 'node:path';
+ import vm from 'node:vm';
++import { EventEmitter } from 'node:events';
+ import * as safety from '../wa-safety.mjs';
+ 
+ class Cache {
+@@ -45,7 +46,7 @@ function harness(t, registered = true) {
+     makeCacheableSignalKeyStore: (keys, logger, cache) => ({ keys, cache }),
+     makeWASocket(config) {
+       const events = new Map();
+-      const socket = { config, events, user: { id: '201000000000:1@s.whatsapp.net' }, end() {}, ws: { close() {} },
++      const socket = { config, events, user: { id: '201000000000:1@s.whatsapp.net' }, end() {}, ws: Object.assign(new EventEmitter(), { close() {} }),
+         ev: { on(k, fn) { events.set(k, fn); }, removeAllListeners() { events.clear(); } },
+         requestPairingCode: async () => '12345678', sendMessage: async jid => ({ key: { id: 'OUT-1', remoteJid: jid, fromMe: true }, message: { conversation: 'reply' } }) };
+       sockets.push(socket); return socket;
+diff --git a/tests/wa-installed.test.mjs b/tests/wa-installed.test.mjs
+index 796cf08..f598ded 100644
+--- a/tests/wa-installed.test.mjs
++++ b/tests/wa-installed.test.mjs
+@@ -5,6 +5,8 @@ import fs from 'node:fs/promises';
+ import path from 'node:path';
+ import os from 'node:os';
+ import { createRequire } from 'node:module';
++import { EventEmitter } from 'node:events';
++import { drainOfflineBatches } from '../wa-safety.mjs';
+ const require = createRequire('/app/package.json');
+ const baileys = await import(require.resolve('@whiskeysockets/baileys'));
+ const { default: NodeCache } = await import(require.resolve('node-cache'));
+@@ -31,3 +33,26 @@ test('installed BufferJSON round-trips retry media keys', () => {
+   assert.deepEqual(Buffer.from(decoded.imageMessage.mediaKey), Buffer.from([1, 3, 5]));
+   assert.deepEqual(Buffer.from(decoded.imageMessage.fileSha256), Buffer.from([2, 4]));
+ });
++
++test('installed event buffer releases an incomplete 104-message batch when the next batch ends', async () => {
++  const { makeEventBuffer } = await import(path.join(path.dirname(require.resolve('@whiskeysockets/baileys')), 'Utils/event-buffer.js'));
++  const events = makeEventBuffer(logger);
++  let received = 0, timer = null;
++  events.on('messages.upsert', event => { received += event.messages.length; });
++  events.buffer();
++  events.emit('messages.upsert', { type: 'append', messages: Array.from({ length: 104 }, (_, i) => ({
++    key: { remoteJid: '123@lid', id: `OFFLINE-${i}`, fromMe: false }, message: { conversation: 'unit test only' }, messageTimestamp: 1
++  })) });
++  assert.equal(received, 0);
++  const socket = { ws: new EventEmitter(), sendNode: async () => {
++    // The installed socket's CB:ib,,offline handler performs this flush.
++    events.flush(); socket.ws.emit('CB:ib,,offline', {});
++  } };
++  const stop = drainOfflineBatches(socket, { setTimer: fn => { timer = fn; return 1; }, clearTimer: () => { timer = null; } });
++  socket.ws.emit('CB:ib,,offline_preview', {});
++  const idle = timer; timer = null; await idle();
++  assert.equal(received, 104);
++  assert.equal(events.isBuffering(), false);
++  assert.equal(timer, null);
++  stop();
++});
+diff --git a/tests/wa-offline-drain.test.mjs b/tests/wa-offline-drain.test.mjs
+new file mode 100644
+index 0000000..fb1f355
+--- /dev/null
++++ b/tests/wa-offline-drain.test.mjs
+@@ -0,0 +1,61 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { EventEmitter } from 'node:events';
++import { drainOfflineBatches } from '../wa-safety.mjs';
++
++function fixture(overrides = {}) {
++  const pending = new Map(), requests = [], logs = [];
++  let clockId = 0;
++  const socket = { ws: new EventEmitter(), sendNode: async node => { requests.push(node); } };
++  const options = {
++    setTimer: fn => { const id = ++clockId; pending.set(id, fn); return id; },
++    clearTimer: id => pending.delete(id), log: (...args) => logs.push(args), ...overrides
++  };
++  const dispose = drainOfflineBatches(socket, options);
++  const tick = async () => { const [id, fn] = pending.entries().next().value || []; if (fn) { pending.delete(id); await fn(); } };
++  return { socket, pending, requests, logs, dispose, tick };
++}
++
++test('missing offline terminator requests another existing-message batch after idle', async () => {
++  const h = fixture();
++  h.socket.ws.emit('CB:ib,,offline_preview', {});
++  for (let i = 0; i < 104; i++) h.socket.ws.emit('CB:message', { attrs: { offline: '1' } });
++  assert.equal(h.requests.length, 0);
++  assert.equal(h.pending.size, 1);
++  await h.tick();
++  assert.equal(h.requests.length, 1);
++  assert.equal(h.requests[0].content[0].tag, 'offline_batch');
++  h.socket.ws.emit('CB:ib,,offline', {});
++  assert.equal(h.pending.size, 0);
++  await h.tick();
++  assert.equal(h.requests.length, 1);
++  h.dispose();
++});
++
++test('live traffic including offline zero does not starve a stalled offline batch', async () => {
++  const h = fixture();
++  h.socket.ws.emit('CB:ib,,offline_preview', {});
++  const timer = [...h.pending.keys()][0];
++  h.socket.ws.emit('CB:message', { attrs: { offline: '0' } });
++  h.socket.ws.emit('CB:message', { attrs: {} });
++  assert.equal([...h.pending.keys()][0], timer);
++  await h.tick(); assert.equal(h.requests.length, 1); h.dispose();
++});
++
++test('reconnect/disposal never requests a batch on an obsolete socket', async () => {
++  let current = true;
++  const h = fixture({ isCurrent: () => current });
++  h.socket.ws.emit('CB:ib,,offline_preview', {});
++  current = false; await h.tick(); assert.equal(h.requests.length, 0);
++  h.dispose(); assert.equal(h.socket.ws.listenerCount('CB:message'), 0);
++});
++
++test('batch requests are bounded and stop after a transport error', async () => {
++  const h = fixture({ maxRequests: 2 }); h.socket.ws.emit('CB:ib,,offline_preview', {});
++  await h.tick(); await h.tick(); await h.tick();
++  assert.equal(h.requests.length, 2); assert.equal(h.pending.size, 0);
++  assert.equal(h.logs.at(-1)[0], 'error'); h.dispose();
++  const failed = fixture(); failed.socket.sendNode = async () => { throw new Error('offline'); };
++  failed.socket.ws.emit('CB:ib,,offline_preview', {}); await failed.tick();
++  assert.equal(failed.pending.size, 0); failed.dispose();
++});
+diff --git a/wa-baileys-index.js b/wa-baileys-index.js
+index 8d67f1a..9d3e40c 100644
+--- a/wa-baileys-index.js
++++ b/wa-baileys-index.js
+@@ -1,5 +1,5 @@
+ import express from 'express';
+-import { canonicalJid, sameConversation, validRecipient, tokenMatches, messageCacheKey, webhookAccepted, retryKind, serviceDiagnostics } from './wa-safety.mjs';
++import { canonicalJid, sameConversation, validRecipient, tokenMatches, messageCacheKey, webhookAccepted, retryKind, serviceDiagnostics, drainOfflineBatches } from './wa-safety.mjs';
+ import pino from 'pino';
+ import fs from 'fs';
+ import path from 'path';
+@@ -107,6 +107,7 @@ const initMutex = new Mutex();
+ let reconnectTimer = null;
+ 
+ let sock = null;
++let stopOfflineDrain = () => {};
+ let qrCodeData = null;
+ let qrCodeDataUrl = null;
+ let connectedPhone = null;
+@@ -331,6 +332,7 @@ function cancelReconnectTimer() {
+ 
+ async function closeExistingSocket(reason = 'Close request') {
+   cancelReconnectTimer();
++  stopOfflineDrain();
+   if (sock) {
+     try {
+       addLog('info', `[SocketManager] Closing existing socket: ${reason}`);
+@@ -524,6 +526,7 @@ async function initBaileysSocket(reason = 'Startup') {
+       });
+ 
+       const activeSocket = sock;
++      stopOfflineDrain = drainOfflineBatches(activeSocket, { isCurrent: () => sock === activeSocket, log: addLog });
+       sock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => recordMapping(lid, jid));
+       sock.ev.on('contacts.upsert', contacts => {
+         for (const contact of contacts || []) {
+diff --git a/wa-safety.mjs b/wa-safety.mjs
+index 6075fca..126244e 100644
+--- a/wa-safety.mjs
++++ b/wa-safety.mjs
+@@ -70,3 +70,50 @@ export function retryKind(parameters = []) {
+   if (text.includes('no session')) return 'missing_session';
+   return 'undecrypted';
+ }
++
++// Baileys 6.7.24 requests only one offline batch. A missing terminator can
++// leave decoded messages/receipts buffered indefinitely on an open socket.
++export function drainOfflineBatches(socket, {
++  isCurrent = () => true, idleMs = 5000, maxRequests = 50,
++  setTimer = setTimeout, clearTimer = clearTimeout, log = () => {}
++} = {}) {
++  let timer = null, active = false, disposed = false, requests = 0;
++  const cancel = () => { if (timer !== null) clearTimer(timer); timer = null; };
++  const arm = () => {
++    cancel();
++    if (!active || disposed || !isCurrent()) return;
++    timer = setTimer(async () => {
++      timer = null;
++      if (!active || disposed || !isCurrent()) return;
++      if (requests >= maxRequests) {
++        active = false;
++        log('error', `[OfflineDrain] Stopped at ${maxRequests} extra batches without completion`);
++        return;
++      }
++      requests++;
++      try {
++        await socket.sendNode({ tag: 'ib', attrs: {}, content: [{ tag: 'offline_batch', attrs: { count: '100' } }] });
++        log('info', `[OfflineDrain] Requested next existing-message batch ${requests}`);
++        arm();
++      } catch (err) {
++        active = false;
++        log('error', `[OfflineDrain] Batch request failed: ${err.message}`);
++      }
++    }, idleMs);
++    timer?.unref?.();
++  };
++  const preview = () => { if (!disposed) { active = true; arm(); } };
++  const complete = () => { active = false; cancel(); log('info', `[OfflineDrain] Server completed offline delivery after ${requests} extra batches`); };
++  const activity = node => {
++    if (active && ['1', 1, true].includes(node?.attrs?.offline)) arm();
++  };
++  socket.ws.on('CB:ib,,offline_preview', preview);
++  socket.ws.on('CB:ib,,offline', complete);
++  for (const event of ['CB:message', 'CB:receipt', 'CB:notification', 'CB:call']) socket.ws.on(event, activity);
++  return () => {
++    disposed = true; active = false; cancel();
++    socket.ws.off?.('CB:ib,,offline_preview', preview);
++    socket.ws.off?.('CB:ib,,offline', complete);
++    for (const event of ['CB:message', 'CB:receipt', 'CB:notification', 'CB:call']) socket.ws.off?.(event, activity);
++  };
++}

@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { EventEmitter } from 'node:events';
 import * as safety from '../wa-safety.mjs';
 
 class Cache {
@@ -46,7 +45,7 @@ function harness(t, registered = true) {
     makeCacheableSignalKeyStore: (keys, logger, cache) => ({ keys, cache }),
     makeWASocket(config) {
       const events = new Map();
-      const socket = { config, events, user: { id: '201000000000:1@s.whatsapp.net' }, end() {}, ws: Object.assign(new EventEmitter(), { close() {} }),
+      const socket = { config, events, user: { id: '201000000000:1@s.whatsapp.net' }, end() {}, ws: { close() {} },
         ev: { on(k, fn) { events.set(k, fn); }, removeAllListeners() { events.clear(); } },
         requestPairingCode: async () => '12345678', sendMessage: async jid => ({ key: { id: 'OUT-1', remoteJid: jid, fromMe: true }, message: { conversation: 'reply' } }) };
       sockets.push(socket); return socket;

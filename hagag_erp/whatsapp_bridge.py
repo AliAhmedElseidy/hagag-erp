@@ -483,8 +483,10 @@ def receive_baileys_event():
 	# LID resolution: if sender_phone is empty and LID matches owner/contact
 	if not sender_phone and (sender_jid or sender_lid or remote_jid):
 		lid_str = sender_lid or sender_jid or remote_jid
-		if "251036744843464" in lid_str:
+		if "88949594783992" in lid_str or "966569589664" in lid_str:
 			sender_phone = "966569589664"
+		elif "251036744843464" in lid_str:
+			sender_phone = "201028632620"
 
 	# 2. Read Bot Mode & AI Settings
 	bot_mode = (hub.bot_mode if hub and hub.bot_mode else "AI + Accounting Hybrid")
@@ -577,7 +579,8 @@ def receive_baileys_event():
 					matching_contacts.append(c)
 					break
 				# 3. Match known owner LID
-				if "251036744843464" in (sender_lid or sender_jid or remote_jid) and c_norm == "966569589664":
+				lid_ctx = sender_lid or sender_jid or remote_jid or ""
+				if ("88949594783992" in lid_ctx or "966569589664" in lid_ctx or "251036744843464" in lid_ctx) and c_norm == "966569589664":
 					matching_contacts.append(c)
 					if not sender_phone:
 						sender_phone = "966569589664"

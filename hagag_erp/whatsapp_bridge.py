@@ -403,6 +403,91 @@ def parse_expense_from_text(text: str) -> dict:
 	}
 
 
+def resolve_destination_jid(target: str) -> str:
+	"""
+	Resolves any recipient identifier (phone number, JID, or LID) to the canonical delivery JID.
+	Prioritizes verified WhatsApp Cloud LID for 1-to-1 contacts to prevent
+	the 'Waiting for this message. This may take a while' Signal ratchet split error.
+	"""
+	clean = (target or "").strip()
+	if not clean:
+		return ""
+
+	# If already explicit LID or Group JID, return directly
+	if clean.endswith("@lid") or clean.endswith("@g.us"):
+		return clean
+
+	norm_phone = normalize_phone_number(clean)
+	if not norm_phone:
+		return clean if "@" in clean else f"{clean}@s.whatsapp.net"
+
+	# 1. Check Elsaidy WhatsApp Contact Rule table for configured or auto-learned whatsapp_lid
+	try:
+		rules = frappe.db.sql("""
+			SELECT whatsapp_lid, phone_number
+			FROM `tabElsaidy WhatsApp Contact Rule`
+			WHERE is_active = 1
+			  AND (phone_number = %s OR phone_number LIKE %s)
+			  AND whatsapp_lid IS NOT NULL AND whatsapp_lid != ''
+			LIMIT 1
+		""", (norm_phone, f"%{norm_phone[-9:]}"), as_dict=True)
+		if rules and rules[0].get("whatsapp_lid"):
+			lid = rules[0]["whatsapp_lid"].strip()
+			if not lid.endswith("@lid"):
+				lid = f"{lid}@lid"
+			frappe.logger("whatsapp").info(f"[ResolveJID] Resolved phone {norm_phone} to Contact Rule LID: {lid}")
+			return lid
+	except Exception as e:
+		frappe.logger("whatsapp").warn(f"[ResolveJID] Error querying contact rules: {e}")
+
+	# 2. Check recent incoming WhatsApp logs for active sender_lid
+	try:
+		recent_lid = frappe.db.sql("""
+			SELECT sender_lid
+			FROM `tabElsaidy WhatsApp Log`
+			WHERE (sender_phone = %s OR receiver_phone = %s)
+			  AND sender_lid IS NOT NULL AND sender_lid != ''
+			ORDER BY creation DESC
+			LIMIT 1
+		""", (norm_phone, norm_phone), as_dict=True)
+		if recent_lid and recent_lid[0].get("sender_lid"):
+			lid = recent_lid[0]["sender_lid"].strip()
+			if not lid.endswith("@lid"):
+				lid = f"{lid}@lid"
+			frappe.logger("whatsapp").info(f"[ResolveJID] Resolved phone {norm_phone} to Log LID: {lid}")
+			return lid
+	except Exception as e:
+		frappe.logger("whatsapp").warn(f"[ResolveJID] Error querying logs: {e}")
+
+	# 3. Default fallback: standard phone JID
+	return f"{norm_phone}@s.whatsapp.net"
+
+
+@frappe.whitelist()
+def sync_all_contact_mappings_to_baileys() -> dict:
+	"""Pushes all known Contact Rule LIDs to Baileys engine for local fast routing."""
+	try:
+		rules = frappe.db.sql("""
+			SELECT phone_number, whatsapp_lid
+			FROM `tabElsaidy WhatsApp Contact Rule`
+			WHERE is_active = 1
+			  AND whatsapp_lid IS NOT NULL AND whatsapp_lid != ''
+		""", as_dict=True)
+		mappings = []
+		for r in rules:
+			clean_pn = normalize_phone_number(r.get("phone_number"))
+			clean_lid = (r.get("whatsapp_lid") or "").strip()
+			if clean_pn and clean_lid:
+				mappings.append({"phone": clean_pn, "lid": clean_lid})
+		if mappings:
+			res = call_baileys_api("sync-contact-mapping", method="POST", data={"mappings": mappings})
+			return {"status": "ok", "synced_count": len(mappings), "baileys_res": res}
+		return {"status": "ok", "synced_count": 0}
+	except Exception as e:
+		frappe.logger("whatsapp").warn(f"Failed to sync contact mappings to Baileys: {e}")
+		return {"status": "error", "message": str(e)}
+
+
 def send_baileys_reply(jid: str, text: str, quoted_msg_id: str = None) -> dict:
 	"""Helper to send reply via Baileys API with strict destination validation."""
 	clean_jid = (jid or "").strip()
@@ -420,8 +505,11 @@ def send_baileys_reply(jid: str, text: str, quoted_msg_id: str = None) -> dict:
 		frappe.logger("whatsapp").warn(f"[SendBlocked] Refusing to reply to bot's own number: {clean_jid}")
 		return {"status": "ignored", "reason": "Cannot reply to bot itself"}
 
+	# Dynamic Outbound Identity Resolution (Auto-resolves to Cloud LID if available)
+	target_jid = resolve_destination_jid(clean_jid)
+
 	payload = {
-		"jid": clean_jid,
+		"jid": target_jid,
 		"message": text,
 		"quoted_message_id": quoted_msg_id
 	}
@@ -1082,7 +1170,7 @@ def send_conversation_reply(target_id: str, message: str, quoted_msg_id: str = N
 	
 	is_group = clean_target.endswith("@g.us")
 	is_lid = clean_target.endswith("@lid")
-	jid = clean_target if (is_group or is_lid) else f"{norm_target}@s.whatsapp.net"
+	jid = clean_target if (is_group or is_lid) else resolve_destination_jid(clean_target)
 	
 	payload = {
 		"jid": jid,
@@ -1309,13 +1397,7 @@ def send_test_whatsapp_message(recipient: str, message: str) -> dict:
 
 	is_group = clean_recipient.endswith("@g.us")
 	is_lid = clean_recipient.endswith("@lid")
-
-	if is_group or is_lid:
-		jid = clean_recipient
-	else:
-		if not norm_recipient:
-			frappe.throw(_("رقم الهاتف غير صالح."))
-		jid = f"{norm_recipient}@s.whatsapp.net"
+	jid = clean_recipient if (is_group or is_lid) else resolve_destination_jid(clean_recipient)
 
 	payload = {
 		"jid": jid,

@@ -13,7 +13,8 @@ import {
   fetchLatestBaileysVersion,
   jidDecode,
   isJidGroup,
-  S_WHATSAPP_NET
+  S_WHATSAPP_NET,
+  proto
 } from '@whiskeysockets/baileys';
 
 const app = express();
@@ -86,19 +87,133 @@ let botName = null;
 let lastDisconnectReason = null;
 let pendingPairingCode = null;
 
-// Caches
+// Caches & Durable Stores
 const msgRetryCounterCache = new NodeCache({ stdTTL: 600, checkperiod: 120 });
 const messageStore = new NodeCache({ stdTTL: 3600, checkperiod: 600 });
 const dedupCache = new NodeCache({ stdTTL: 3600, checkperiod: 300 });
 const signalCache = new NodeCache({ stdTTL: 300, useClones: false, deleteOnExpire: true });
+const pendingRetries = new Map(); // msgId -> { remoteJid, timestamp }
+
+const MESSAGE_CACHE_DIR = path.join(SESSION_DIR, 'message_cache');
+const MAPPINGS_FILE = path.join(SESSION_DIR, 'contact_mappings.json');
 
 // Session healing cooldown tracker: JID -> { count, lastAttempt }
 const healCooldownMap = new Map();
 const MAX_HEAL_ATTEMPTS = 3;
 const HEAL_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
-// Dynamic LID <-> Phone Number mapping (learned at runtime from WhatsApp stanzas & Frappe contacts)
-const lidPnMap = new Map();
+// Bidirectional Dynamic LID <-> Phone Number mapping
+const lidPnMap = new Map(); // LID -> Phone
+const pnLidMap = new Map(); // Phone -> LID
+
+function ensureDirectories() {
+  try {
+    if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
+    if (!fs.existsSync(MESSAGE_CACHE_DIR)) fs.mkdirSync(MESSAGE_CACHE_DIR, { recursive: true });
+  } catch (err) {
+    addLog('warn', `[Init] Error ensuring directories: ${err.message}`);
+  }
+}
+
+function loadMappings() {
+  try {
+    if (fs.existsSync(MAPPINGS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(MAPPINGS_FILE, 'utf8'));
+      if (data && typeof data === 'object') {
+        for (const [k, v] of Object.entries(data.lidToPn || {})) {
+          lidPnMap.set(k, v);
+        }
+        for (const [k, v] of Object.entries(data.pnToLid || {})) {
+          pnLidMap.set(k, v);
+        }
+        addLog('info', `[MappingStore] Loaded ${lidPnMap.size} LID->PN mappings and ${pnLidMap.size} PN->LID mappings from disk`);
+      }
+    }
+  } catch (err) {
+    addLog('warn', `[MappingStore] Error loading contact mappings: ${err.message}`);
+  }
+}
+
+let saveMappingsTimer = null;
+function saveMappings() {
+  if (saveMappingsTimer) return;
+  saveMappingsTimer = setTimeout(() => {
+    saveMappingsTimer = null;
+    try {
+      const lidToPnObj = Object.fromEntries(lidPnMap);
+      const pnToLidObj = Object.fromEntries(pnLidMap);
+      fs.writeFileSync(MAPPINGS_FILE, JSON.stringify({ lidToPn: lidToPnObj, pnToLid: pnToLidObj }, null, 2), 'utf8');
+    } catch (err) {
+      addLog('warn', `[MappingStore] Error saving contact mappings: ${err.message}`);
+    }
+  }, 1000);
+}
+
+function recordMapping(lidOrJid, phoneNumber) {
+  if (!lidOrJid || !phoneNumber) return;
+  const cleanPn = normalizeNumber(phoneNumber);
+  if (!cleanPn) return;
+
+  const raw = String(lidOrJid).trim();
+  const cleanLid = raw.replace('@lid', '').split(':')[0];
+  const lidJid = `${cleanLid}@lid`;
+
+  lidPnMap.set(cleanLid, cleanPn);
+  lidPnMap.set(lidJid, cleanPn);
+
+  pnLidMap.set(cleanPn, lidJid);
+  pnLidMap.set(`${cleanPn}@s.whatsapp.net`, lidJid);
+
+  saveMappings();
+}
+
+function storeMessage(msgId, msgObj) {
+  if (!msgId || !msgObj) return;
+  messageStore.set(msgId, msgObj);
+  try {
+    ensureDirectories();
+    const filePath = path.join(MESSAGE_CACHE_DIR, `${msgId}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(msgObj), 'utf8');
+  } catch (err) {
+    // Non-fatal cache failure
+  }
+}
+
+function fetchStoredMessage(msgId) {
+  if (!msgId) return null;
+  const inMem = messageStore.get(msgId);
+  if (inMem) return inMem;
+  try {
+    const filePath = path.join(MESSAGE_CACHE_DIR, `${msgId}.json`);
+    if (fs.existsSync(filePath)) {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      messageStore.set(msgId, data);
+      return data;
+    }
+  } catch (err) {
+    // Non-fatal cache read failure
+  }
+  return null;
+}
+
+function cleanOldMessageCache() {
+  try {
+    if (!fs.existsSync(MESSAGE_CACHE_DIR)) return;
+    const now = Date.now();
+    const maxAgeMs = 72 * 60 * 60 * 1000; // 3 days
+    const files = fs.readdirSync(MESSAGE_CACHE_DIR);
+    for (const f of files) {
+      if (f.endsWith('.json')) {
+        const fp = path.join(MESSAGE_CACHE_DIR, f);
+        const stat = fs.statSync(fp);
+        if (now - stat.mtimeMs > maxAgeMs) {
+          fs.unlinkSync(fp);
+        }
+      }
+    }
+  } catch (err) {}
+}
+setInterval(cleanOldMessageCache, 6 * 60 * 60 * 1000);
 
 // ─── Utility Functions ────────────────────────────────────────────────────────
 function normalizeNumber(number) {
@@ -210,8 +325,8 @@ async function healTargetSession(targetId) {
     if (fs.existsSync(SESSION_DIR)) {
       const files = fs.readdirSync(SESSION_DIR);
       for (const file of files) {
-        // STRICT SAFETY: Never touch creds.json or core auth keys
-        if (file === 'creds.json' || file.startsWith('app-state-sync-key')) {
+        // STRICT SAFETY: Never touch creds.json, core auth keys, or persistent mappings
+        if (file === 'creds.json' || file.startsWith('app-state-sync-key') || file === 'contact_mappings.json' || file === 'message_cache') {
           continue;
         }
 
@@ -278,6 +393,111 @@ async function healTargetSession(targetId) {
   }
 }
 
+function unwrapMessage(msg) {
+  let m = msg?.message;
+  while (m && (m.ephemeralMessage || m.viewOnceMessage || m.viewOnceMessageV2 || m.documentWithCaptionMessage)) {
+    m = (m.ephemeralMessage || m.viewOnceMessage || m.viewOnceMessageV2 || m.documentWithCaptionMessage).message;
+  }
+  return m;
+}
+
+function extractMessageText(m) {
+  return (
+    m?.conversation ||
+    m?.extendedTextMessage?.text ||
+    m?.imageMessage?.caption ||
+    m?.videoMessage?.caption ||
+    m?.documentMessage?.caption ||
+    m?.buttonsResponseMessage?.selectedButtonId ||
+    m?.listResponseMessage?.singleSelectReply?.selectedRowId ||
+    ''
+  );
+}
+
+async function dispatchMessageToFrappe(msg, m, text) {
+  const msgId = msg.key?.id;
+  const remoteJid = msg.key?.remoteJid || '';
+  const isGroup = remoteJid.endsWith('@g.us');
+  const senderJid = isGroup
+    ? (msg.key.participant || msg.participant || '')
+    : remoteJid;
+
+  let rawSenderPn = msg.key.senderPn || msg.key.participantPn || '';
+  const signalUser = senderJid.split('@')[0].split(':')[0];
+
+  if (rawSenderPn) {
+    recordMapping(senderJid, rawSenderPn);
+    recordMapping(signalUser, rawSenderPn);
+  }
+
+  if (!rawSenderPn) {
+    if (senderJid.endsWith('@s.whatsapp.net')) {
+      rawSenderPn = signalUser;
+    } else if (remoteJid.endsWith('@s.whatsapp.net')) {
+      rawSenderPn = remoteJid.split('@')[0].split(':')[0];
+    } else if (lidPnMap.has(signalUser)) {
+      rawSenderPn = lidPnMap.get(signalUser);
+    } else if (lidPnMap.has(senderJid)) {
+      rawSenderPn = lidPnMap.get(senderJid);
+    }
+  }
+
+  const senderPhone = normalizeNumber(rawSenderPn);
+  const senderLid = senderJid.includes('@lid') ? senderJid : (remoteJid.includes('@lid') ? remoteJid : '');
+  if (senderLid && senderPhone) {
+    recordMapping(senderLid, senderPhone);
+  }
+
+  const replyJid = remoteJid;
+
+  addLog('info', `[Msg] From: ${senderPhone || senderJid} | RemoteJid: ${remoteJid} | ReplyJid: ${replyJid} | Text: ${text.substring(0, 60)} | MsgID: ${msgId}`);
+
+  try {
+    const payload = {
+      event_type: 'message',
+      message_id: msgId,
+      remote_jid: remoteJid,
+      sender_jid: senderJid,
+      sender_phone: senderPhone,
+      sender_lid: senderLid,
+      reply_jid: replyJid,
+      is_group: isGroup,
+      text: text,
+      timestamp: msg.messageTimestamp,
+      has_media: !!(
+        m?.imageMessage ||
+        m?.videoMessage ||
+        m?.audioMessage ||
+        m?.documentMessage
+      ),
+      message_type: Object.keys(m || {})[0] || 'text',
+      push_name: msg.pushName || ''
+    };
+
+    const resp = await fetch(FRAPPE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Host': FRAPPE_HOST,
+        'X-Frappe-Site-Name': FRAPPE_HOST,
+        'X-Api-Token': API_TOKEN
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    if (resp.ok) {
+      metrics.webhookSuccess++;
+    } else {
+      metrics.webhookFailed++;
+      addLog('warn', `[Webhook] Frappe returned HTTP ${resp.status} for msg ${msgId}`);
+    }
+  } catch (fetchErr) {
+    metrics.webhookFailed++;
+    addLog('error', '[Webhook] Failed to forward message to Frappe:', fetchErr.message);
+  }
+}
+
 // ─── Socket Singleton Manager & Lifecycle ─────────────────────────────────────
 async function initBaileysSocket(reason = 'Startup') {
   return initMutex.runExclusive(async () => {
@@ -297,6 +517,10 @@ async function initBaileysSocket(reason = 'Startup') {
       if (!fs.existsSync(SESSION_DIR)) {
         fs.mkdirSync(SESSION_DIR, { recursive: true });
       }
+
+      ensureDirectories();
+      loadMappings();
+      recordMapping('88949594783992@lid', '966569589664');
 
       const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
 
@@ -326,8 +550,14 @@ async function initBaileysSocket(reason = 'Startup') {
         logger,
         printQRInTerminal: false,
         getMessage: async (key) => {
-          const msg = messageStore.get(key?.id);
-          return msg?.message || undefined;
+          if (!key?.id) return undefined;
+          const cached = fetchStoredMessage(key.id);
+          if (cached?.message) {
+            addLog('info', `[GetMessage] Serving stored message ${key.id} for retry to ${key.remoteJid}`);
+            return cached.message;
+          }
+          addLog('warn', `[GetMessage] Message ${key.id} requested for retry but not found in cache`);
+          return undefined;
         }
       });
 
@@ -411,7 +641,14 @@ async function initBaileysSocket(reason = 'Startup') {
           if (!msg.message) {
             const stubType = msg.messageStubType;
             const stubParams = msg.messageStubParameters;
-            addLog('warn', `[MsgUndecrypted] Message ${msgId} from ${remoteJid} could not be decrypted | StubType: ${stubType} | Params: ${JSON.stringify(stubParams)}`);
+            if (stubType === 2 || stubType === proto?.WebMessageInfo?.StubType?.CIPHERTEXT) {
+              if (msgId) {
+                pendingRetries.set(msgId, { remoteJid, timestamp: Date.now() });
+              }
+              addLog('info', `[RetryPending] Message ${msgId} from ${remoteJid} absent from node — Baileys retry request initiated.`);
+            } else {
+              addLog('warn', `[MsgUndecrypted] Message ${msgId} from ${remoteJid} undecrypted | StubType: ${stubType} | Params: ${JSON.stringify(stubParams)}`);
+            }
             continue;
           }
 
@@ -421,105 +658,17 @@ async function initBaileysSocket(reason = 'Startup') {
           if (msgId) dedupCache.set(msgId, true);
           metrics.messagesReceived++;
 
-          const isGroup = remoteJid.endsWith('@g.us');
-          const senderJid = isGroup
-            ? (msg.key.participant || msg.participant || '')
-            : remoteJid;
+          storeMessage(msgId, msg);
 
-          // Learn / resolve LID <-> Phone Number
-          let rawSenderPn = msg.key.senderPn || msg.key.participantPn || '';
-          const signalUser = senderJid.split('@')[0].split(':')[0];
-          if (rawSenderPn) {
-            lidPnMap.set(signalUser, normalizeNumber(rawSenderPn));
-            lidPnMap.set(senderJid, normalizeNumber(rawSenderPn));
-          }
-
-          if (!rawSenderPn) {
-            if (senderJid.endsWith('@s.whatsapp.net')) {
-              rawSenderPn = signalUser;
-            } else if (remoteJid.endsWith('@s.whatsapp.net')) {
-              rawSenderPn = remoteJid.split('@')[0].split(':')[0];
-            } else if (lidPnMap.has(signalUser)) {
-              rawSenderPn = lidPnMap.get(signalUser);
-            } else if (lidPnMap.has(senderJid)) {
-              rawSenderPn = lidPnMap.get(senderJid);
-            }
-          }
-
-          const senderPhone = normalizeNumber(rawSenderPn);
-          // replyJid: MUST ALWAYS be remoteJid (the conversation chat where the message was sent!)
-          const replyJid = remoteJid;
-
-          messageStore.set(msgId, msg);
-
-          // Unwrap all message wrappers (ephemeral, viewOnce, etc.)
-          let m = msg.message;
-          while (m && (m.ephemeralMessage || m.viewOnceMessage || m.viewOnceMessageV2 || m.documentWithCaptionMessage)) {
-            m = (m.ephemeralMessage || m.viewOnceMessage || m.viewOnceMessageV2 || m.documentWithCaptionMessage).message;
-          }
-
-          const text =
-            m?.conversation ||
-            m?.extendedTextMessage?.text ||
-            m?.imageMessage?.caption ||
-            m?.videoMessage?.caption ||
-            m?.documentMessage?.caption ||
-            m?.buttonsResponseMessage?.selectedButtonId ||
-            m?.listResponseMessage?.singleSelectReply?.selectedRowId ||
-            '';
+          const m = unwrapMessage(msg);
+          const text = extractMessageText(m);
 
           if (!text) {
             addLog('debug', `[MsgNoText] Message ${msgId} has no text (type: ${Object.keys(m || {})[0]})`);
             continue;
           }
 
-          addLog('info', `[Msg] From: ${senderPhone || senderJid} | RemoteJid: ${remoteJid} | Text: ${text.substring(0, 60)} | MsgID: ${msgId}`);
-
-          // Forward to Frappe webhook
-          try {
-            const payload = {
-              event_type: 'message',
-              message_id: msgId,
-              remote_jid: remoteJid,
-              sender_jid: senderJid,
-              sender_phone: senderPhone,
-              sender_lid: senderJid.includes('@lid') ? senderJid : (remoteJid.includes('@lid') ? remoteJid : ''),
-              reply_jid: replyJid,
-              is_group: isGroup,
-              text: text,
-              timestamp: msg.messageTimestamp,
-              has_media: !!(
-                m?.imageMessage ||
-                m?.videoMessage ||
-                m?.audioMessage ||
-                m?.documentMessage
-              ),
-              message_type: Object.keys(m || {})[0] || 'text',
-              push_name: msg.pushName || ''
-            };
-
-            const resp = await fetch(FRAPPE_WEBHOOK_URL, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Host': FRAPPE_HOST,
-                'X-Frappe-Site-Name': FRAPPE_HOST,
-                'X-Api-Token': API_TOKEN
-              },
-              body: JSON.stringify(payload),
-              signal: AbortSignal.timeout(15000)
-            });
-
-            if (resp.ok) {
-              metrics.webhookSuccess++;
-            } else {
-              metrics.webhookFailed++;
-              addLog('warn', `[Webhook] Frappe returned HTTP ${resp.status} for msg ${msgId}`);
-            }
-          } catch (fetchErr) {
-            metrics.webhookFailed++;
-            addLog('error', '[Webhook] Failed to forward message to Frappe:', fetchErr.message);
-          }
+          await dispatchMessageToFrappe(msg, m, text);
         }
       });
 
@@ -552,8 +701,24 @@ async function initBaileysSocket(reason = 'Startup') {
               }).catch(() => {});
             } catch (_) {}
           }
-          if (update.key.id && update.update.message) {
-            messageStore.set(update.key.id, { key: update.key, message: update.update.message });
+
+          if (update.key?.id && update.update?.message) {
+            const msgId = update.key.id;
+            const fullMsg = { key: update.key, message: update.update.message };
+            storeMessage(msgId, fullMsg);
+
+            // If this message was pending retry resolution from a previously absent node
+            if (pendingRetries.has(msgId) || !dedupCache.has(msgId)) {
+              pendingRetries.delete(msgId);
+              const m = unwrapMessage(fullMsg);
+              const text = extractMessageText(m);
+              if (text && !dedupCache.has(msgId)) {
+                dedupCache.set(msgId, true);
+                metrics.messagesReceived++;
+                addLog('info', `[RetryResolved] Successfully decrypted pending message ${msgId} after retry! Forwarding to Frappe...`);
+                await dispatchMessageToFrappe(fullMsg, m, text);
+              }
+            }
           }
         }
       });
@@ -724,6 +889,16 @@ async function handleSendMessage(req, res) {
       jid = clean.length > 13 ? `${clean}@lid` : `${clean}@s.whatsapp.net`;
     }
 
+    // Dynamic Outbound Identity Resolution (Auto-route PN -> verified Cloud LID to avoid ratchet mismatch)
+    if (jid.endsWith('@s.whatsapp.net')) {
+      const cleanPn = normalizeNumber(jid.split('@')[0]);
+      if (pnLidMap.has(cleanPn)) {
+        const mappedLid = pnLidMap.get(cleanPn);
+        addLog('info', `[SendRouting] Auto-routed recipient PN ${cleanPn} -> verified Cloud LID ${mappedLid}`);
+        jid = mappedLid;
+      }
+    }
+
     // Guard 1: Never send to newsletter or broadcast
     if (jid.includes('@newsletter') || jid.includes('@broadcast') || jid === 'status@broadcast') {
       addLog('warn', `[SendBlocked] Blocked sending to newsletter/broadcast: ${jid}`);
@@ -738,7 +913,7 @@ async function handleSendMessage(req, res) {
 
     let options = {};
     if (quoted_message_id) {
-      const cached = messageStore.get(quoted_message_id);
+      const cached = fetchStoredMessage(quoted_message_id);
       if (cached) {
         options.quoted = cached;
       } else {
@@ -766,7 +941,7 @@ async function handleSendMessage(req, res) {
     metrics.messagesSent++;
     const sentMsgId = sentMsg?.key?.id;
     if (sentMsgId) {
-      messageStore.set(sentMsgId, sentMsg);
+      storeMessage(sentMsgId, sentMsg);
     }
 
     addLog('info', `[Send] Sent to ${jid}: ${String(message || '').substring(0, 50)} | MsgID: ${sentMsgId}`);
@@ -811,10 +986,7 @@ app.post('/sync-contact-mapping', (req, res) => {
   if (Array.isArray(mappings)) {
     for (const m of mappings) {
       if (m.lid && m.phone) {
-        const cleanLid = String(m.lid).trim().replace('@lid', '');
-        const cleanPn = normalizeNumber(m.phone);
-        lidPnMap.set(cleanLid, cleanPn);
-        lidPnMap.set(`${cleanLid}@lid`, cleanPn);
+        recordMapping(m.lid, m.phone);
         count++;
       }
     }

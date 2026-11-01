@@ -153,7 +153,10 @@ function ensureDirectories() {
 function loadMappings() {
   try {
     const defaultPhone = process.env.WA_PHONE || '966569589664';
-    recordMapping('88949594783992@lid', defaultPhone);
+    lidPnMap.set('88949594783992', defaultPhone);
+    lidPnMap.set('88949594783992@lid', defaultPhone);
+    pnLidMap.set(defaultPhone, '88949594783992@lid');
+    pnLidMap.set(`${defaultPhone}@s.whatsapp.net`, '88949594783992@lid');
     if (fs.existsSync(MAPPINGS_FILE)) {
       const data = JSON.parse(fs.readFileSync(MAPPINGS_FILE, 'utf8'));
       if (data && typeof data === 'object') {

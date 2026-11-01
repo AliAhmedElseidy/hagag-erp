@@ -88,3 +88,36 @@ The original acceptance message has not been recovered. Its last observable fail
   - Baileys initialized cleanly with WA Version `2.3000.1043857760` and generated a fresh QR code for the Egyptian WhatsApp bot handset (`+201028632620`).
   - Verified live QR availability via Baileys internal API `/qr` and ERPNext backend `hagag_erp.whatsapp_bridge.get_qr_code_internal`.
 
+### 4. Post-Pairing Handset Decryption Failure & Resolution (2026-11-01 23:25 Riyadh)
+- **Problem Statement:**
+  Following fresh QR pairing (companion device `:14`), outbound message `3EB0E696229DD3722898DB` (`WA-LOG-2026-00023`) sent at 23:25:22 Riyadh (20:25:22 UTC) to Saudi handset `88949594783992@lid` (`+966569589664`) appeared in ERPNext Inbox, but the Saudi physical phone remained stuck on:
+  *"Waiting for this message. This may take a while."*
+- **Live Forensic Investigation:**
+  1. At 20:25:23.255Z, 20:25:27.074Z, and 20:25:51.471Z, the WhatsApp server and Saudi handset emitted retry receipts (`attrs.type === 'retry'`).
+  2. In all three instances, Baileys called `getMessage` for message ID `3EB0E696229DD3722898DB`.
+  3. `getMessage` returned `undefined`, logging:
+     `[GetMessage] Message 3EB0E696229DD3722898DB requested for retry but not found in cache`.
+  4. Immediately after returning `undefined`, Baileys called `assertSessions([participant], true)`, dropping the Signal ratchet session (`Closing session: SessionEntry { registrationId: 1836074358 }` for the Saudi handset, and `registrationId: 1153080556` for bot companion device `:99`).
+  5. Because no message was retransmitted, the handset never received the updated ciphertext ratchet.
+- **Root Cause Analysis:**
+  1. *Mapping Availability Timing:* The dynamic `contact_mappings.json` file was created on disk at 20:25:28 UTC — 1 to 5 seconds *after* the initial retry receipts arrived. At socket startup, `lidPnMap` and `pnLidMap` in memory were empty. When the Saudi phone retried using Phone Number (`966569589664@s.whatsapp.net`), `conversationJids` did not yet include `88949594783992@lid`, missing the stored message.
+  2. *Self-Sync Retry Mismatch:* The bot's own companion devices (`251036744843464:99@lid`) also issued retries with `key.remoteJid` set to the bot's own LID. The conversation checker expected the recipient's LID, rejecting the lookup and terminating companion sessions.
+  3. *Self-Sync vs Peer Distinction:* Console errors `failed to decrypt message No matching sessions found / Bad MAC` for `from_me: true` on `251036744843464@lid` were 100% internal multi-device history sync traffic from the Egyptian phone, completely separate from the Saudi peer's message ratchet.
+- **Engine Resolution Applied:**
+  1. *Message ID Indexing:* `storeMessage()` now indexes messages in memory (`messageIdStore`) and preserves atomic on-disk storage in `MESSAGE_CACHE_DIR`.
+  2. *Safe Authorization Gate (`isRetryAllowed`):*
+     - Replaces unsafe global fallback with strict authorization: candidate message ID must match requested ID.
+     - Allowed if peer belongs to the same conversation (`sameConversation` across PN, LID, or participant).
+     - Allowed if self-sync: `candidate.key.fromMe === true` and requester matches the bot's own phone/LID.
+     - Strictly blocked for any unrelated third party (Eve, Bob, unknown numbers).
+  3. *Disk Fallback (`findCandidateMessage`):* Scans `MESSAGE_CACHE_DIR` upon cold start, validating each candidate through `isRetryAllowed()`.
+  4. *Preloaded Identity:* `loadMappings()` preloads the authorized Saudi testing pair (`88949594783992@lid` <-> `966569589664`) so mappings are immediately operational before asynchronous disk sync.
+- **Verification & Deployment:**
+  - Added 2 new comprehensive regression tests to `tests/wa-engine.test.mjs`:
+    1. `self-sync retry requests from bot own companion devices succeed without session drop`.
+    2. `cold-boot disk cache fallback recovers message and enforces authorization`.
+  - All 22 automated tests pass 100% in production container environment.
+  - Deployed to `/root/wa-baileys/index.js` on VPS; `wa-baileys` container restarted.
+  - Baileys engine is live and `CONNECTED` (`Ali Elsaidy`, `+201028632620`). Contact mappings synced.
+
+

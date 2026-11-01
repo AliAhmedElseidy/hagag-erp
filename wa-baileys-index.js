@@ -127,6 +127,7 @@ let shuttingDown = false;
 const pendingRetries = new Map(); // msgId -> { remoteJid, timestamp }
 
 const MESSAGE_CACHE_DIR = path.join(SESSION_DIR, 'message_cache');
+const MESSAGE_ID_INDEX_DIR = path.join(SESSION_DIR, 'message_id_index');
 const MAPPINGS_FILE = path.join(SESSION_DIR, 'contact_mappings.json');
 
 // Bidirectional Dynamic LID <-> Phone Number mapping
@@ -145,6 +146,9 @@ function ensureDirectories() {
         }
       }
     }
+    if (!fs.existsSync(MESSAGE_ID_INDEX_DIR)) {
+      fs.mkdirSync(MESSAGE_ID_INDEX_DIR, { recursive: true, mode: 0o700 });
+    }
   } catch (err) {
     addLog('warn', `[Init] Error ensuring directories: ${err.message}`);
   }
@@ -152,11 +156,6 @@ function ensureDirectories() {
 
 function loadMappings() {
   try {
-    const defaultPhone = process.env.WA_PHONE || '966569589664';
-    lidPnMap.set('88949594783992', defaultPhone);
-    lidPnMap.set('88949594783992@lid', defaultPhone);
-    pnLidMap.set(defaultPhone, '88949594783992@lid');
-    pnLidMap.set(`${defaultPhone}@s.whatsapp.net`, '88949594783992@lid');
     if (fs.existsSync(MAPPINGS_FILE)) {
       const data = JSON.parse(fs.readFileSync(MAPPINGS_FILE, 'utf8'));
       if (data && typeof data === 'object') {
@@ -168,6 +167,9 @@ function loadMappings() {
         }
         addLog('info', `[MappingStore] Loaded ${lidPnMap.size} LID->PN mappings and ${pnLidMap.size} PN->LID mappings from disk`);
       }
+    }
+    if (process.env.WA_DEFAULT_LID && process.env.WA_DEFAULT_PHONE) {
+      recordMapping(process.env.WA_DEFAULT_LID, process.env.WA_DEFAULT_PHONE);
     }
   } catch (err) {
     addLog('warn', `[MappingStore] Error loading contact mappings: ${err.message}`);
@@ -221,6 +223,10 @@ function storeMessage(msgId, msgObj) {
   messageIdStore.set(msgId, msgObj);
   ensureDirectories();
   atomicJson(path.join(MESSAGE_CACHE_DIR, `${cacheKey}.json`), msgObj);
+  try {
+    if (!fs.existsSync(MESSAGE_ID_INDEX_DIR)) fs.mkdirSync(MESSAGE_ID_INDEX_DIR, { recursive: true, mode: 0o700 });
+    atomicJson(path.join(MESSAGE_ID_INDEX_DIR, `${msgId}.json`), { cacheKey });
+  } catch (_) {}
 }
 
 function fetchStoredMessage(key) {
@@ -264,10 +270,29 @@ function isRetryAllowed(candidate, requestedKey, mapping = lidPnMap) {
 
 function findCandidateMessage(key) {
   if (!key?.id) return null;
+  // 1. In-memory hot lookup
   const inMem = messageIdStore.get(key.id);
   if (inMem?.message && isRetryAllowed(inMem, key, lidPnMap)) {
     return inMem;
   }
+  // 2. Direct O(1) indexed disk lookup
+  try {
+    const indexPath = path.join(MESSAGE_ID_INDEX_DIR, `${key.id}.json`);
+    if (fs.existsSync(indexPath)) {
+      const idx = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+      if (idx?.cacheKey) {
+        const fullPath = path.join(MESSAGE_CACHE_DIR, `${idx.cacheKey}.json`);
+        if (fs.existsSync(fullPath)) {
+          const data = JSON.parse(fs.readFileSync(fullPath, 'utf8'), BufferJSON.reviver);
+          if (data?.key?.id === key.id && data.message && isRetryAllowed(data, key, lidPnMap)) {
+            messageIdStore.set(key.id, data);
+            return data;
+          }
+        }
+      }
+    }
+  } catch (_) {}
+  // 3. Fallback scan for legacy or unindexed cache files
   try {
     if (fs.existsSync(MESSAGE_CACHE_DIR)) {
       for (const file of fs.readdirSync(MESSAGE_CACHE_DIR)) {

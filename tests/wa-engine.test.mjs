@@ -41,7 +41,7 @@ function harness(t, registered = true) {
     },
     DisconnectReason: { loggedOut: 401, connectionReplaced: 440, badSession: 500 },
     fetchLatestBaileysVersion: async () => ({ version: [2, 3, 4] }),
-    useMultiFileAuthState: async () => ({ state: { creds: { registered, me: { id: '201000000000:1@s.whatsapp.net', lid: '999@lid' } }, keys: { set: async () => {} } }, saveCreds: async () => { saves.push('saved'); } }),
+    useMultiFileAuthState: async () => ({ state: { creds: { registered, me: registered ? { id: '201000000000:1@s.whatsapp.net', lid: '999@lid' } : undefined }, keys: { set: async () => {} } }, saveCreds: async () => { saves.push('saved'); } }),
     makeCacheableSignalKeyStore: (keys, logger, cache) => ({ keys, cache }),
     makeWASocket(config) {
       const events = new Map();

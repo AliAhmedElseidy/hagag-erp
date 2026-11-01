@@ -17,7 +17,7 @@ import {
 } from '@whiskeysockets/baileys';
 
 const app = express();
-const logger = pino({ level: 'warn', redact: ['key', 'session', 'creds', 'keys'] }, {
+const logger = pino({ level: 'warn', redact: ['session', 'creds', 'keys'] }, {
   write(line) {
     try {
       const event = JSON.parse(line);
@@ -480,7 +480,7 @@ async function initBaileysSocket(reason = 'Startup') {
         });
         return pending;
       };
-      authRegistered = Boolean(state.creds.registered);
+      authRegistered = Boolean(state.creds.registered || state.creds.me?.id);
       ownLid = canonicalJid(state.creds.me?.lid || '');
       const signalCache = new NodeCache({ stdTTL: 300, useClones: false });
 
@@ -538,7 +538,7 @@ async function initBaileysSocket(reason = 'Startup') {
         });
         // Observe rejection; the chain remains rejected to block unsafe recreation.
         void credentialWrites.catch(() => {});
-        authRegistered = Boolean(state.creds.registered);
+        authRegistered = Boolean(state.creds.registered || state.creds.me?.id);
       });
 
       // ── Connection Update ───────────────────────────────────────────────────
@@ -558,6 +558,7 @@ async function initBaileysSocket(reason = 'Startup') {
 
         if (connection === 'open') {
           currentState = EngineState.CONNECTED;
+          authRegistered = true;
           qrCodeData = null;
           qrCodeDataUrl = null;
           pendingPairingCode = null;

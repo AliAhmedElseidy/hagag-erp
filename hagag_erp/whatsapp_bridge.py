@@ -334,8 +334,8 @@ def call_ai_api(user_message: str, provider: str, api_key: str, model: str, syst
 	if provider == "Gemini":
 		# Normalize model identifier if user typed display name
 		model_map = {
-			"gemini 3.5 flash lite": "gemini-2.5-flash",
-			"gemini 3.8 flash": "gemini-2.5-flash",
+			"gemini 3.5 flash lite": "gemini-3.5-flash-lite",
+			"gemini 3.8 flash": "gemini-3.8-flash",
 			"gemini 2.5 flash": "gemini-2.5-flash",
 			"gemini-flash": "gemini-2.5-flash",
 			"gemini flash": "gemini-2.5-flash"
@@ -371,13 +371,9 @@ def call_ai_api(user_message: str, provider: str, api_key: str, model: str, syst
 			if not candidates:
 				return fallback(user_message, "لم يقدم النموذج رداً")
 
-			return (
-				candidates[0]
-				.get("content", {})
-				.get("parts", [{}])[0]
-				.get("text", "")
-				.strip()
-			)
+			parts = candidates[0].get("content", {}).get("parts", [])
+			answer = "\n".join(part.get("text", "") for part in parts if not part.get("thought")).strip()
+			return answer or fallback(user_message, "لم يقدم النموذج نصاً قابلاً للإرسال")
 
 		elif provider in ("OpenAI", "Custom API"):
 			url = "https://api.openai.com/v1/chat/completions"

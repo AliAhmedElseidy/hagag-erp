@@ -234,6 +234,20 @@ class BridgeTests(unittest.TestCase):
         self.bridge.process_baileys_message('IN-1')
         self.bridge._process_baileys_payload.assert_not_called()
 
+    def test_selected_gemini_model_is_not_silently_downgraded(self):
+        self.requests.post.return_value = Record(status_code=200, json=lambda: {'candidates': [{'content': {'parts': [{'text': 'private reasoning', 'thought': True}, {'text': 'ready'}]}}]})
+        result = self.bridge.call_ai_api('hello', 'Gemini', 'offline-key', 'Gemini 3.5 Flash Lite', 'prompt')
+        self.assertEqual(result, 'ready')
+        self.assertIn('/gemini-3.5-flash-lite:', self.requests.post.call_args.args[0])
+        self.assertNotIn('offline-key', self.requests.post.call_args.args[0])
+
+    def test_ai_failure_is_reported_as_fallback(self):
+        self.requests.post.return_value = Record(status_code=404, json=lambda: {'error': {'message': 'Unavailable model'}})
+        metadata = {}
+        result = self.bridge.call_ai_api('hello', 'Gemini', 'offline-key', 'model', 'prompt', result_metadata=metadata)
+        self.assertTrue(result)
+        self.assertTrue(metadata['fallback'])
+
 
 if __name__ == '__main__':
     unittest.main()

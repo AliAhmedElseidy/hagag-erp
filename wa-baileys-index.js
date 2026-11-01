@@ -1,5 +1,5 @@
 import express from 'express';
-import { canonicalJid, sameConversation, validRecipient, tokenMatches, messageCacheKey, webhookAccepted, retryKind, serviceDiagnostics } from './wa-safety.mjs';
+import { canonicalJid, sameConversation, validRecipient, tokenMatches, messageCacheKey, webhookAccepted, retryKind, serviceDiagnostics, drainOfflineBatches } from './wa-safety.mjs';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
@@ -107,6 +107,7 @@ const initMutex = new Mutex();
 let reconnectTimer = null;
 
 let sock = null;
+let stopOfflineDrain = () => {};
 let qrCodeData = null;
 let qrCodeDataUrl = null;
 let connectedPhone = null;
@@ -331,6 +332,7 @@ function cancelReconnectTimer() {
 
 async function closeExistingSocket(reason = 'Close request') {
   cancelReconnectTimer();
+  stopOfflineDrain();
   if (sock) {
     try {
       addLog('info', `[SocketManager] Closing existing socket: ${reason}`);
@@ -524,6 +526,7 @@ async function initBaileysSocket(reason = 'Startup') {
       });
 
       const activeSocket = sock;
+      stopOfflineDrain = drainOfflineBatches(activeSocket, { isCurrent: () => sock === activeSocket, log: addLog });
       sock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => recordMapping(lid, jid));
       sock.ev.on('contacts.upsert', contacts => {
         for (const contact of contacts || []) {

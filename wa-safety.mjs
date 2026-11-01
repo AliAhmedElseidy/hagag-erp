@@ -70,3 +70,50 @@ export function retryKind(parameters = []) {
   if (text.includes('no session')) return 'missing_session';
   return 'undecrypted';
 }
+
+// Baileys 6.7.24 requests only one offline batch. A missing terminator can
+// leave decoded messages/receipts buffered indefinitely on an open socket.
+export function drainOfflineBatches(socket, {
+  isCurrent = () => true, idleMs = 5000, maxRequests = 50,
+  setTimer = setTimeout, clearTimer = clearTimeout, log = () => {}
+} = {}) {
+  let timer = null, active = false, disposed = false, requests = 0;
+  const cancel = () => { if (timer !== null) clearTimer(timer); timer = null; };
+  const arm = () => {
+    cancel();
+    if (!active || disposed || !isCurrent()) return;
+    timer = setTimer(async () => {
+      timer = null;
+      if (!active || disposed || !isCurrent()) return;
+      if (requests >= maxRequests) {
+        active = false;
+        log('error', `[OfflineDrain] Stopped at ${maxRequests} extra batches without completion`);
+        return;
+      }
+      requests++;
+      try {
+        await socket.sendNode({ tag: 'ib', attrs: {}, content: [{ tag: 'offline_batch', attrs: { count: '100' } }] });
+        log('info', `[OfflineDrain] Requested next existing-message batch ${requests}`);
+        arm();
+      } catch (err) {
+        active = false;
+        log('error', `[OfflineDrain] Batch request failed: ${err.message}`);
+      }
+    }, idleMs);
+    timer?.unref?.();
+  };
+  const preview = () => { if (!disposed) { active = true; arm(); } };
+  const complete = () => { active = false; cancel(); log('info', `[OfflineDrain] Server completed offline delivery after ${requests} extra batches`); };
+  const activity = node => {
+    if (active && ['1', 1, true].includes(node?.attrs?.offline)) arm();
+  };
+  socket.ws.on('CB:ib,,offline_preview', preview);
+  socket.ws.on('CB:ib,,offline', complete);
+  for (const event of ['CB:message', 'CB:receipt', 'CB:notification', 'CB:call']) socket.ws.on(event, activity);
+  return () => {
+    disposed = true; active = false; cancel();
+    socket.ws.off?.('CB:ib,,offline_preview', preview);
+    socket.ws.off?.('CB:ib,,offline', complete);
+    for (const event of ['CB:message', 'CB:receipt', 'CB:notification', 'CB:call']) socket.ws.off?.(event, activity);
+  };
+}

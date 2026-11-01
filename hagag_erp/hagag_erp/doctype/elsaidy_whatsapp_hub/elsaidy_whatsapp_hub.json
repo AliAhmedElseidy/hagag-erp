@@ -37,42 +37,50 @@
   "default_vat_account",
   "column_break_ai",
   "raven_accounting_agent",
-  "system_prompt_override"
+  "system_prompt_override",
+  "sec_ai_brain",
+  "bot_mode",
+  "enable_ai_reply",
+  "ai_provider",
+  "ai_model",
+  "column_break_ai2",
+  "ai_api_key",
+  "ai_system_prompt"
  ],
  "fields": [
   {
    "fieldname": "tab_connection",
    "fieldtype": "Tab Break",
-   "label": "الربط وحالة البوت"
+   "label": "\u0644\u0648\u062d\u0629 \u0627\u0644\u062a\u062d\u0643\u0645 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629"
   },
   {
    "fieldname": "status_html",
    "fieldtype": "HTML",
-   "label": "لوحة مؤشر الحالة"
+   "label": "\u0628\u0627\u0646\u0631 \u062d\u0627\u0644\u0629 \u0627\u0644\u0627\u062a\u0635\u0627\u0644"
   },
   {
    "fieldname": "sec_creds",
    "fieldtype": "Section Break",
-   "label": "بيانات الاتصال وخادم Baileys"
+   "label": "\u0628\u064a\u0627\u0646\u0627\u062a \u0627\u0644\u0627\u0639\u062a\u0645\u0627\u062f \u0648\u062e\u062f\u0645\u0629 Baileys"
   },
   {
-   "description": "أدخل رقم الهاتف لطلب كود الربط المكون من 8 خانات (مثال: 01028632620 أو 0569589664)",
+   "description": "\u0623\u062f\u062e\u0644 \u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062a\u0641 \u0627\u0644\u0645\u0631\u0627\u062f \u0631\u0628\u0637\u0647 \u0648\u0633\u062a\u062d\u0635\u0644 \u0639\u0644\u0649 \u0643\u0648\u062f \u0645\u0643\u0648\u0646 \u0645\u0646 8 \u0623\u0631\u0642\u0627\u0645 (\u0645\u062b\u0627\u0644: 01028632620 \u0623\u0648 0569589664)",
    "fieldname": "bot_phone_number",
    "fieldtype": "Data",
-   "label": "رقم هاتف البوت"
+   "label": "\u0631\u0642\u0645 \u0647\u0627\u062a\u0641 \u0627\u0644\u0628\u0648\u062a"
   },
   {
    "default": "Disconnected",
    "fieldname": "connection_status",
    "fieldtype": "Select",
-   "label": "حالة الاتصال",
+   "label": "\u062d\u0627\u0644\u0629 \u0627\u0644\u0627\u062a\u0635\u0627\u0644",
    "options": "Disconnected\nConnecting\nConnected\nError",
    "read_only": 1
   },
   {
    "fieldname": "connected_phone",
    "fieldtype": "Data",
-   "label": "الرقم المتصل حالياً",
+   "label": "\u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062a\u0641 \u0627\u0644\u0645\u062a\u0635\u0644 \u062d\u0627\u0644\u064a\u0627\u064b",
    "read_only": 1
   },
   {
@@ -83,38 +91,38 @@
    "default": "http://wa-baileys:3000",
    "fieldname": "baileys_url",
    "fieldtype": "Data",
-   "label": "رابط خادم Baileys",
+   "label": "\u0639\u0646\u0648\u0627\u0646 \u062e\u062f\u0645\u0629 Baileys",
    "reqd": 1
   },
   {
    "default": "HAGAG_WA_7f3c9a2d6e4b8a1c",
    "fieldname": "api_token",
    "fieldtype": "Password",
-   "label": "رمز أمان API (Token)",
+   "label": "\u0631\u0645\u0632 \u0623\u0645\u0627\u0646 API (Token)",
    "reqd": 1
   },
   {
    "fieldname": "last_sync_time",
    "fieldtype": "Datetime",
-   "label": "آخر فحص للاتصال",
+   "label": "\u0622\u062e\u0631 \u0648\u0642\u062a \u0645\u0632\u0627\u0645\u0646\u0629",
    "read_only": 1
   },
   {
    "fieldname": "sec_defaults",
    "fieldtype": "Section Break",
-   "label": "الإعدادات الافتراضية للعمليات"
+   "label": "\u0627\u0644\u0625\u0639\u062f\u0627\u062f\u0627\u062a \u0627\u0644\u0645\u062d\u0627\u0633\u0628\u064a\u0629 \u0627\u0644\u0627\u0641\u062a\u0631\u0627\u0636\u064a\u0629"
   },
   {
-   "default": "شركة ركن سبل الأفق للمقاولات",
+   "default": "\u0634\u0631\u0643\u0629 \u0631\u0643\u0646 \u0633\u0628\u0644 \u0627\u0644\u0623\u0641\u0642 \u0644\u0644\u0645\u0642\u0627\u0648\u0644\u0627\u062a",
    "fieldname": "default_company",
    "fieldtype": "Link",
-   "label": "الشركة الافتراضية",
+   "label": "\u0627\u0644\u0634\u0631\u0643\u0629 \u0627\u0644\u0627\u0641\u062a\u0631\u0627\u0636\u064a\u0629",
    "options": "Company"
   },
   {
    "fieldname": "default_cost_center",
    "fieldtype": "Link",
-   "label": "مركز التكلفة الافتراضي",
+   "label": "\u0645\u0631\u0643\u0632 \u0627\u0644\u062a\u0643\u0644\u0641\u0629 \u0627\u0644\u0627\u0641\u062a\u0631\u0627\u0636\u064a",
    "options": "Cost Center"
   },
   {
@@ -125,94 +133,94 @@
    "default": "1",
    "fieldname": "auto_reply_enabled",
    "fieldtype": "Check",
-   "label": "تفعيل الردود التلقائية والذكية"
+   "label": "\u062a\u0641\u0639\u064a\u0644 \u0627\u0644\u0631\u062f \u0627\u0644\u062a\u0644\u0642\u0627\u0626\u064a \u0639\u0644\u0649 \u0627\u0644\u0631\u0633\u0627\u0626\u0644"
   },
   {
    "fieldname": "tab_direct_rules",
    "fieldtype": "Tab Break",
-   "label": "المحادثات المباشرة (1-to-1)"
+   "label": "\u0642\u0648\u0627\u0639\u062f \u0627\u0644\u0645\u062d\u0627\u062f\u062b\u0629 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 (1-to-1)"
   },
   {
    "fieldname": "sec_direct_header",
    "fieldtype": "Section Break",
-   "label": "سياسة المحادثات الفردية"
+   "label": "\u0625\u0639\u062f\u0627\u062f \u0627\u0644\u0645\u062d\u0627\u062f\u062b\u0629 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629"
   },
   {
    "default": "0",
    "fieldname": "allow_unregistered_direct",
    "fieldtype": "Check",
-   "label": "السماح بالرد على الأرقام غير المسجلة"
+   "label": "\u0627\u0633\u062a\u0642\u0628\u0627\u0644 \u0631\u0633\u0627\u0626\u0644 \u0645\u0646 \u063a\u064a\u0631 \u0645\u0633\u062c\u0644\u064a\u0646"
   },
   {
-   "default": "عذراً، هذا الرقم غير مصرح له بتنفيذ عمليات على نظام Elsaidy ERP. يرجى التواصل مع إدارة النظام.",
+   "default": "\u0639\u0630\u0631\u0627\u064b\u060c \u0644\u0633\u062a \u0645\u0631\u062e\u0635\u0627\u064b \u0644\u0644\u062a\u0641\u0627\u0639\u0644 \u0645\u0639 \u0628\u0648\u062a Elsaidy ERP. \u062a\u0648\u0627\u0635\u0644 \u0645\u0639\u0646\u0627 \u0645\u0646 \u062e\u0644\u0627\u0644 \u0627\u0644\u0642\u0646\u0648\u0627\u062a \u0627\u0644\u0631\u0633\u0645\u064a\u0629.",
    "fieldname": "unregistered_auto_reply",
    "fieldtype": "Small Text",
-   "label": "رسالة الرد التلقائي للأرقام غير المصرح لها"
+   "label": "\u0631\u062f \u062a\u0644\u0642\u0627\u0626\u064a \u0644\u0644\u0623\u0631\u0642\u0627\u0645 \u063a\u064a\u0631 \u0627\u0644\u0645\u0633\u062c\u0644\u0629"
   },
   {
    "fieldname": "sec_direct_table",
    "fieldtype": "Section Break",
-   "label": "جهات الاتصال المصرح لها (المهندسين والمشرفين)"
+   "label": "\u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0623\u0631\u0642\u0627\u0645 \u0627\u0644\u0645\u0633\u0645\u0648\u062d \u0644\u0647\u0627 (\u0628\u0637\u0627\u0642\u0627\u062a \u062a\u062d\u0643\u0645 \u0641\u0631\u062f\u064a\u0629)"
   },
   {
    "fieldname": "allowed_direct_contacts",
    "fieldtype": "Table",
-   "label": "قائمة جهات الاتصال المعتمدة",
+   "label": "\u062c\u0647\u0627\u062a \u0627\u0644\u062a\u0648\u0627\u0635\u0644 \u0627\u0644\u0645\u0635\u0631\u062d \u0644\u0647\u0627",
    "options": "Elsaidy WhatsApp Contact Rule"
   },
   {
    "fieldname": "tab_group_rules",
    "fieldtype": "Tab Break",
-   "label": "مجموعات المشاريع (Groups)"
+   "label": "\u0645\u062c\u0645\u0648\u0639\u0627\u062a \u0627\u0644\u0648\u0627\u062a\u0633\u0622\u0628 (Groups)"
   },
   {
    "fieldname": "sec_grp_header",
    "fieldtype": "Section Break",
-   "label": "سياسة مجموعات المشاريع"
+   "label": "\u0625\u0639\u062f\u0627\u062f \u0627\u0644\u0645\u062c\u0645\u0648\u0639\u0627\u062a \u0627\u0644\u0645\u0633\u0645\u0648\u062d\u0629"
   },
   {
    "default": "0",
    "fieldname": "allow_unregistered_groups",
    "fieldtype": "Check",
-   "label": "السماح بالتفاعل في أي مجموعة مضاف إليها البوت"
+   "label": "\u0627\u0633\u062a\u0642\u0628\u0627\u0644 \u0631\u0633\u0627\u0626\u0644 \u0645\u0646 \u0623\u064a \u0645\u062c\u0645\u0648\u0639\u0629 \u063a\u064a\u0631 \u0645\u062f\u0631\u062c\u0629"
   },
   {
    "fieldname": "sec_grp_table",
    "fieldtype": "Section Break",
-   "label": "مجموعات واتساب المعتمدة"
+   "label": "\u0645\u062c\u0645\u0648\u0639\u0627\u062a \u0627\u0644\u0648\u0627\u062a\u0633\u0622\u0628 \u0627\u0644\u0645\u062f\u0631\u062c\u0629"
   },
   {
    "fieldname": "allowed_groups",
    "fieldtype": "Table",
-   "label": "مجموعات المشاريع المعتمدة",
+   "label": "\u0645\u062c\u0645\u0648\u0639\u0627\u062a \u0627\u0644\u0648\u0627\u062a\u0633\u0622\u0628 \u0627\u0644\u0645\u0635\u0631\u062d\u0629",
    "options": "Elsaidy WhatsApp Group Rule"
   },
   {
    "fieldname": "tab_ai_zatca",
    "fieldtype": "Tab Break",
-   "label": "المحرك المالي و Raven AI"
+   "label": "\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064a \u0648 Raven AI"
   },
   {
    "fieldname": "sec_zatca",
    "fieldtype": "Section Break",
-   "label": "تكامل المحرك الضريبي ZATCA 15%"
+   "label": "\u0645\u062d\u0631\u0643 \u0627\u0644\u0636\u0631\u0627\u0626\u0628 \u0627\u0644\u0633\u0639\u0648\u062f\u064a ZATCA 15%"
   },
   {
    "default": "1",
    "fieldname": "enable_zatca_tax_engine",
    "fieldtype": "Check",
-   "label": "تطبيق قواعد الضريبة السعودية ZATCA 15% تلقائياً"
+   "label": "\u062a\u0641\u0639\u064a\u0644 \u0645\u062d\u0631\u0643 \u0627\u0644\u0636\u0631\u0627\u0626\u0628 \u0627\u0644\u062a\u0644\u0642\u0627\u0626\u064a ZATCA 15% \u0633\u0639\u0648\u062f\u064a"
   },
   {
    "fieldname": "default_expense_account",
    "fieldtype": "Link",
-   "label": "حساب المصروفات الافتراضي",
+   "label": "\u062d\u0633\u0627\u0628 \u0627\u0644\u0645\u0635\u0627\u0631\u064a\u0641 \u0627\u0644\u0627\u0641\u062a\u0631\u0627\u0636\u064a",
    "options": "Account"
   },
   {
    "fieldname": "default_vat_account",
    "fieldtype": "Link",
-   "label": "حساب ضريبة المدخلات (15%)",
+   "label": "\u062d\u0633\u0627\u0628 \u0636\u0631\u064a\u0628\u0629 \u0627\u0644\u0642\u064a\u0645\u0629 \u0627\u0644\u0645\u0636\u0627\u0641\u0629 (15%)",
    "options": "Account"
   },
   {
@@ -223,18 +231,64 @@
    "default": "Accounting",
    "fieldname": "raven_accounting_agent",
    "fieldtype": "Data",
-   "label": "وكيل Raven AI المحاسبي"
+   "label": "\u0627\u0633\u0645 Raven AI \u0627\u0644\u0645\u062d\u0627\u0633\u0628\u064a"
   },
   {
    "fieldname": "system_prompt_override",
    "fieldtype": "Code",
-   "label": "توجيهات النظام الإضافية"
+   "label": "\u062a\u062c\u0627\u0648\u0632 \u0627\u0644\u0633\u064a\u0633\u062a\u0645 \u0628\u0631\u0648\u0645\u0628\u062a"
+  },
+  {
+   "fieldname": "sec_ai_brain",
+   "fieldtype": "Section Break",
+   "label": "\u2728 \u0625\u0639\u062f\u0627\u062f\u0627\u062a \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064a \u0648\u0627\u0644\u0631\u062f \u0627\u0644\u062a\u0644\u0642\u0627\u0626\u064a"
+  },
+  {
+   "default": "AI + Accounting Hybrid",
+   "fieldname": "bot_mode",
+   "fieldtype": "Select",
+   "label": "\u0648\u0636\u0639 \u062a\u0634\u063a\u064a\u0644 \u0627\u0644\u0628\u0648\u062a",
+   "options": "AI + Accounting Hybrid\nAccounting Commands Only\nAI Assistant Only\nDisabled / Log Only"
+  },
+  {
+   "default": "0",
+   "fieldname": "enable_ai_reply",
+   "fieldtype": "Check",
+   "label": "\u062a\u0641\u0639\u064a\u0644 \u0627\u0644\u0631\u062f \u0628\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064a"
+  },
+  {
+   "default": "Gemini",
+   "fieldname": "ai_provider",
+   "fieldtype": "Select",
+   "label": "\u0645\u0632\u0648\u062f \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064a",
+   "options": "Gemini\nOpenAI\nCustom API"
+  },
+  {
+   "default": "gemini-2.5-flash",
+   "fieldname": "ai_model",
+   "fieldtype": "Data",
+   "label": "\u0646\u0645\u0648\u0630\u062c \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064a"
+  },
+  {
+   "fieldname": "column_break_ai2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "ai_api_key",
+   "fieldtype": "Password",
+   "label": "\u0645\u0641\u062a\u0627\u062d API \u0644\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064a"
+  },
+  {
+   "default": "\u0623\u0646\u062a \u0627\u0644\u0645\u0633\u0627\u0639\u062f \u0627\u0644\u0630\u0643\u064a \u0644\u0634\u0631\u0643\u0629 \u0627\u0644\u0635\u0639\u064a\u062f\u064a \u0644\u0644\u0645\u0642\u0627\u0648\u0644\u0627\u062a. \u062a\u0631\u062f \u0628\u0627\u0644\u0644\u063a\u0629 \u0627\u0644\u0639\u0631\u0628\u064a\u0629 \u0628\u0623\u0633\u0644\u0648\u0628 \u0645\u0647\u0646\u064a \u0645\u062d\u062a\u0631\u0645. \u0625\u0630\u0627 \u0648\u0631\u062f\u062a\u0643 \u0631\u0633\u0627\u0644\u0629 \u0645\u0627\u0644\u064a\u0629\u060c \u0637\u0644\u0628 \u0645\u0646 \u0627\u0644\u0645\u0633\u062a\u062e\u062f\u0645 \u0625\u0631\u0633\u0627\u0644\u0647\u0627 \u0628\u0627\u0644\u0635\u064a\u063a\u0629: '\u0635\u0631\u0641\u062a [\u0645\u0628\u0644\u063a] \u0631\u064a\u0627\u0644 [\u0628\u064a\u0627\u0646]' \u0644\u0644\u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u0641\u0648\u0631\u064a.",
+   "fieldname": "ai_system_prompt",
+   "fieldtype": "Code",
+   "label": "\u062a\u0639\u0644\u064a\u0645\u0627\u062a \u0634\u062e\u0635\u064a\u0629 \u0627\u0644\u0628\u0648\u062a (System Prompt)"
   }
  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-31 23:00:00.000000",
+ "modified": "2026-11-01 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Hagag ERP",
  "name": "Elsaidy WhatsApp Hub",

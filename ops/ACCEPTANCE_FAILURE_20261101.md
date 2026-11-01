@@ -70,3 +70,21 @@ The original acceptance message has not been recovered. Its last observable fail
 - Physical credentials in `/root/wa-baileys/session/creds.json` remain intact (1,878 bytes, identity digest `8430f806c972...` matches `auth-identity-before.sha256`), but WhatsApp's server (RVA = Registration/Validation/Auth) has revoked device 13.
 - In accordance with safety rules, no session files were wiped or destroyed.
 - Real physical message reception requires re-linking the Egyptian WhatsApp account (`+201028632620`) to obtain a fresh companion registration from WhatsApp.
+
+### 3. Cross-Conversation Disclosure Remediation & Fresh QR Pairing (2026-11-01 Final Stage)
+- **Security Defect Removed:**
+  The un-scoped fallback `id_${key.id}.json` and `messageStore.get('id:' + key.id)` introduced in commit `cb925c0` could allow a peer requesting a known message ID to retrieve message contents belonging to an unrelated conversation.
+- **Strict Scoping Applied:**
+  1. `storeMessage`: All writes to `id:${msgId}` and `id_${msgId}.json` were completely removed. Messages are cached exclusively under keyed conversation hashes.
+  2. `fetchRetryMessage`: Evaluates candidate JIDs strictly belonging to the verified conversation (`reqJid` and trusted bidirectional LID/PN aliases).
+  3. Every candidate is strictly validated using `sameConversation(reqJid, candidate.key.remoteJid, lidPnMap)` and ID equality before returning.
+  4. Negative & positive regression tests added to `tests/wa-engine.test.mjs`, proving cross-conversation disclosure is strictly blocked across PN, LID, and unknown third parties.
+  5. Purged any legacy un-scoped `id_*.json` cache files.
+- **Session Archive & Fresh QR Generation:**
+  - Owner confirmed that the old device companion registration was intentionally unlinked from the Egyptian handset.
+  - The old session directory was safely archived to `/root/elsaidy-backups/session-unlinked-archive-20261101_2318/` (sha256 `ee94f4ac9818...`).
+  - Old Signal ratchets were strictly excluded from the new session.
+  - A clean session directory was initialized with permissions `0700`.
+  - Baileys initialized cleanly with WA Version `2.3000.1043857760` and generated a fresh QR code for the Egyptian WhatsApp bot handset (`+201028632620`).
+  - Verified live QR availability via Baileys internal API `/qr` and ERPNext backend `hagag_erp.whatsapp_bridge.get_qr_code_internal`.
+

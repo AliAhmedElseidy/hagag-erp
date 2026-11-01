@@ -776,11 +776,25 @@ def get_dashboard_telemetry() -> dict:
 	except Exception:
 		db_metrics = {}
 
+	is_connected = bool(health_data.get("connected") or status_data.get("connected"))
+	connected_phone = health_data.get("phone") or status_data.get("bot_phone") or (hub.connected_phone if hub else None)
+	engine_state = health_data.get("engine_state") or status_data.get("engine_state") or ("CONNECTED" if is_connected else "DISCONNECTED")
+
+	# Auto-sync Hub document connection state in MariaDB
+	new_db_status = "Connected" if is_connected else ("Connecting" if engine_state == "CONNECTING" else "Disconnected")
+	if hub and (hub.connection_status != new_db_status or (connected_phone and hub.connected_phone != connected_phone)):
+		frappe.db.set_value("Elsaidy WhatsApp Hub", None, {
+			"connection_status": new_db_status,
+			"connected_phone": connected_phone or hub.connected_phone or "",
+			"last_sync_time": now_datetime()
+		}, update_modified=False)
+		frappe.db.commit()
+
 	return {
 		"status": "ok",
-		"engine_state": health_data.get("engine_state") or status_data.get("engine_state") or ("CONNECTED" if health_data.get("connected") else "DISCONNECTED"),
-		"whatsapp_connected": bool(health_data.get("connected") or status_data.get("connected")),
-		"connected_phone": health_data.get("phone") or status_data.get("bot_phone") or (hub.connected_phone if hub else None),
+		"engine_state": engine_state,
+		"whatsapp_connected": is_connected,
+		"connected_phone": connected_phone,
 		"bot_name": health_data.get("bot_name") or status_data.get("bot_name") or "Elsaidy WhatsApp Hub",
 		"has_qr": bool(health_data.get("has_qr") or status_data.get("has_qr")),
 		"uptime_seconds": health_data.get("uptime_seconds") or status_data.get("uptime_seconds") or 0,

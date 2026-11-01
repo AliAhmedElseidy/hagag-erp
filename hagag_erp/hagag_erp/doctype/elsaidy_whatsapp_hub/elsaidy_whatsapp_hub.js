@@ -23,6 +23,13 @@ frappe.ui.form.on('Elsaidy WhatsApp Hub', {
 				const uptimeFormatted = frm.events.format_uptime(uptimeSec);
 				const metrics = data.today_metrics || {};
 
+				if (isConnected && frm.doc.connection_status !== 'Connected') {
+					frm.set_value('connection_status', 'Connected');
+				}
+				if (data.connected_phone && frm.doc.connected_phone !== data.connected_phone) {
+					frm.set_value('connected_phone', data.connected_phone);
+				}
+
 				let statusBadge = '';
 				let borderColor = '#dc3545';
 				let bgColor = '#fff8f8';

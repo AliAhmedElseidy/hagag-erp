@@ -16,6 +16,12 @@ from hagag_erp.whatsapp_bridge import (
 
 
 class ElsaidyWhatsAppHub(Document):
+	def onload(self):
+		try:
+			get_hub_status_internal(self)
+		except Exception:
+			pass
+
 	def validate(self):
 		if self.bot_phone_number:
 			self.bot_phone_number = normalize_phone_number(self.bot_phone_number)

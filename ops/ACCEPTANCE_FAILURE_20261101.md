@@ -41,3 +41,32 @@ Deployment uses read-only binds for the generated `libsignal-queue-job.js` and `
 During existing-backlog inspection a temporary, uniquely marked takeover was applied only to the sole authorized test contact, preventing automated replies and accounting execution. It must be removed after recovery, without changing a takeover set independently by the owner.
 
 The original acceptance message has not been recovered. Its last observable failed stage is before the application's inbound handler/admission. The underlying reason that WhatsApp did not expose this particular message remains unproven. The offline-drain defect is verified but its repair candidate was withdrawn; it must not be reported as the proven cause or as successful acceptance of WA-1101-A. Do not request another handset test or send repeated outbound test messages during this investigation.
+
+
+## Verified retry cache mismatch & companion session invalidation (2026-11-01 continuation)
+
+### 1. Verified Defect: Outbound Retry Cache Key Asymmetry
+- **Evidence:** Runtime logs during live sending of messages `3EB0EF497B8719C8778004` and `3EB0387F3733604B5BBBFD` to `88949594783992@lid` recorded immediate peer retry requests that failed with:
+  `[GetMessage] Message <id> requested for retry but not found in cache`
+  despite both messages existing on disk in `/app/session/message_cache/`.
+- **Root Cause:** Outbound messages are stored with `key.fromMe = true` and `key.participant = undefined`. When a peer handset receives ciphertext it cannot immediately decrypt, it transmits a retry receipt. In Baileys `messages-recv.js:handleReceipt`, because `attrs.recipient` is set in multi-device direct messages and `attrs.from` is the peer, Baileys sets `key.fromMe = false` and `key.participant = peerJid`. Passing this `key` into `messageCacheKey()` yielded a completely different SHA256 digest, so `fetchStoredMessage(key)` looked for a non-existent cache file.
+- **Consequences:**
+  1. `getMessage` returned `undefined`.
+  2. Baileys `sendMessagesAgain` invoked `assertSessions([participant], true)`, force-closing the established Signal ratchet session (`Closing session: SessionEntry`) without retransmitting the message.
+  3. The recipient handset remained stuck on *"Waiting for this message. This may take a while"*.
+  4. The outbound message remained stuck in `Pending` status in MariaDB / ERPNext.
+- **Repair Applied:**
+  `fetchRetryMessage(key, socket)` now evaluates:
+  1. Exact requested key.
+  2. Inverse direction (`fromMe: !key.fromMe`, participant stripped) to match outbound storage.
+  3. Alternate JID (LID <-> PN) in both directions.
+  4. Fallback lookup by message ID (`id_${key.id}.json` and memory index).
+- **Verification:** Unit test added in `tests/wa-engine.test.mjs` confirming peer retry receipts with `fromMe=false` and participant properly resolve stored outbound messages across LID, PN, and ID fallback. All 16 engine tests, 21 node tests, and 18 python tests pass.
+
+### 2. Live Runtime Status: Companion Device Revocation (`401 location="rva"`)
+- At 2026-11-01T15:18:33.618Z (18:18 Riyadh), after the repeated unhandled retry requests, WhatsApp server terminated the stream: `[ERROR] stream errored out`.
+- On reconnection attempts, WhatsApp's authentication server returned:
+  `{"message":"Connection Failure", "data":{"reason":"401", "location":"rva"}}`.
+- Physical credentials in `/root/wa-baileys/session/creds.json` remain intact (1,878 bytes, identity digest `8430f806c972...` matches `auth-identity-before.sha256`), but WhatsApp's server (RVA = Registration/Validation/Auth) has revoked device 13.
+- In accordance with safety rules, no session files were wiped or destroyed.
+- Real physical message reception requires re-linking the Egyptian WhatsApp account (`+201028632620`) to obtain a fresh companion registration from WhatsApp.

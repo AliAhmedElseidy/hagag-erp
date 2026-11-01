@@ -56,7 +56,7 @@ function harness(t, registered = true) {
   let source = fs.readFileSync(new URL('../wa-baileys-index.js', import.meta.url), 'utf8');
   source = source.replace(/^import[\s\S]*?from\s+['"][^'"]+['"];\s*/gm, '');
   source = source.split('// ─── Server Startup')[0];
-  source += '\nglobalThis.engine = { initBaileysSocket, handlePairingCode, handleSendMessage, storeMessage, fetchStoredMessage, drainWebhookOutbox, queueWebhook, authorized, metrics, unwrapMessage, extractMessageText, recordMapping, state: () => currentState, credentialWrites: () => credentialWrites };';
+  source += '\nglobalThis.engine = { initBaileysSocket, handlePairingCode, handleSendMessage, storeMessage, fetchStoredMessage, fetchRetryMessage, drainWebhookOutbox, queueWebhook, authorized, metrics, unwrapMessage, extractMessageText, recordMapping, state: () => currentState, credentialWrites: () => credentialWrites };';
   vm.createContext(context); vm.runInContext(source, context);
   function response() { return { code: 200, body: null, status(n) { this.code = n; return this; }, json(v) { this.body = v; return this; } }; }
   const request = body => ({ headers: { authorization: 'Bearer unit-test-only' }, body, query: {} });
@@ -189,4 +189,26 @@ test('outbound group retry receipts can supply a participant without changing th
   const key = { id: 'GROUP-OUT', remoteJid: '123-456@g.us', fromMe: true };
   assert.equal(safety.messageCacheKey(key), safety.messageCacheKey({ ...key, participant: '789@lid' }));
   assert.notEqual(safety.messageCacheKey({ ...key, fromMe: false }), safety.messageCacheKey({ ...key, fromMe: false, participant: '789@lid' }));
+});
+
+test('peer retry receipts with fromMe=false or participant find stored outbound messages', async t => {
+  const h = harness(t);
+  const outKey = { id: 'RETRY-123', remoteJid: '88949594783992@lid', fromMe: true };
+  h.storeMessage(outKey.id, { key: outKey, message: { extendedTextMessage: { text: 'test reply' } } });
+
+  // 1. Peer asks for retry with fromMe=false and participant=peer
+  const peerKey1 = { id: 'RETRY-123', remoteJid: '88949594783992@lid', fromMe: false, participant: '88949594783992@lid' };
+  const found1 = await h.fetchRetryMessage(peerKey1);
+  assert.equal(found1?.message?.extendedTextMessage?.text, 'test reply');
+
+  // 2. Peer asks for retry with alternate PN JID
+  h.recordMapping('88949594783992@lid', '966569589664@s.whatsapp.net');
+  const peerKey2 = { id: 'RETRY-123', remoteJid: '966569589664@s.whatsapp.net', fromMe: false };
+  const found2 = await h.fetchRetryMessage(peerKey2);
+  assert.equal(found2?.message?.extendedTextMessage?.text, 'test reply');
+
+  // 3. Fallback by message ID
+  const peerKey3 = { id: 'RETRY-123', remoteJid: 'unknown@s.whatsapp.net', fromMe: false };
+  const found3 = await h.fetchRetryMessage(peerKey3);
+  assert.equal(found3?.message?.extendedTextMessage?.text, 'test reply');
 });

@@ -204,8 +204,14 @@ function storeMessage(msgId, msgObj) {
   const cacheKey = messageCacheKey(msgObj?.key);
   if (!msgId || !cacheKey || !msgObj.message) return;
   messageStore.set(cacheKey, msgObj);
+  if (msgId) {
+    messageStore.set(`id:${msgId}`, msgObj);
+  }
   ensureDirectories();
   atomicJson(path.join(MESSAGE_CACHE_DIR, `${cacheKey}.json`), msgObj);
+  if (msgId && /^[A-Za-z0-9_-]+$/.test(msgId)) {
+    atomicJson(path.join(MESSAGE_CACHE_DIR, `id_${msgId}.json`), msgObj);
+  }
 }
 
 function fetchStoredMessage(key) {
@@ -221,8 +227,17 @@ function fetchStoredMessage(key) {
 }
 
 async function fetchRetryMessage(key, socket) {
-  const exact = fetchStoredMessage(key);
-  if (exact) return exact;
+  if (!key?.id) return null;
+  let match = fetchStoredMessage(key);
+  if (match) return match;
+  match = fetchStoredMessage({ ...key, fromMe: !key.fromMe, participant: undefined });
+  if (match) return match;
+  if (key.participant) {
+    match = fetchStoredMessage({ ...key, participant: undefined });
+    if (match) return match;
+    match = fetchStoredMessage({ ...key, fromMe: !key.fromMe, participant: undefined });
+    if (match) return match;
+  }
   const jid = canonicalJid(key?.remoteJid);
   let alternate = jid.endsWith('@lid') ? lidPnMap.get(jid) : pnLidMap.get(jid);
   if (alternate && !alternate.includes('@')) alternate += '@s.whatsapp.net';
@@ -230,7 +245,25 @@ async function fetchRetryMessage(key, socket) {
     const mapping = socket.signalRepository.lidMapping;
     alternate = jid.endsWith('@lid') ? await mapping.getPNForLID(jid) : await mapping.getLIDForPN(jid);
   }
-  return alternate ? fetchStoredMessage({ ...key, remoteJid: alternate }) : null;
+  if (alternate) {
+    match = fetchStoredMessage({ ...key, remoteJid: alternate });
+    if (match) return match;
+    match = fetchStoredMessage({ ...key, remoteJid: alternate, fromMe: !key.fromMe, participant: undefined });
+    if (match) return match;
+  }
+  const idCached = messageStore.get(`id:${key.id}`);
+  if (idCached) return idCached;
+  try {
+    const idPath = path.join(MESSAGE_CACHE_DIR, `id_${key.id}.json`);
+    if (fs.existsSync(idPath)) {
+      const val = JSON.parse(fs.readFileSync(idPath, 'utf8'), BufferJSON.reviver);
+      if (val) {
+        messageStore.set(`id:${key.id}`, val);
+        return val;
+      }
+    }
+  } catch (_) {}
+  return null;
 }
 
 const OUTBOX_DIR = path.join(SESSION_DIR, 'webhook_outbox');
@@ -523,6 +556,11 @@ async function initBaileysSocket(reason = 'Startup') {
         getMessage: async (key) => {
           if (!key?.id) return undefined;
           const cached = await fetchRetryMessage(key, sock);
+          const msg = cached?.message || cached;
+          if (msg && (msg.conversation || msg.extendedTextMessage || msg.imageMessage || msg.documentMessage || msg.videoMessage || msg.audioMessage)) {
+            addLog('info', `[GetMessage] Serving stored message ${key.id} for retry to ${key.remoteJid}`);
+            return msg;
+          }
           if (cached?.message) {
             addLog('info', `[GetMessage] Serving stored message ${key.id} for retry to ${key.remoteJid}`);
             return cached.message;

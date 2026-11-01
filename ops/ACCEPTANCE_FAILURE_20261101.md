@@ -14,11 +14,19 @@ The owner reported sending `اختبار الصعيدي WA-1101-A` after approxi
 
 ## Narrow repair candidate — withdrawn after live regression
 
-Baileys 6.7.24 sends only one `offline_batch count=100` on `offline_preview`. A bounded continuation was tested and deployed temporarily to request the next batch after idle. It completed the actual offline batch, but exposed a live regression: CPU rose to approximately 118%, HTTP health requests exceeded five seconds, and connections closed with 428/408 and reconnected. It did not recover the acceptance message. The candidate was therefore withdrawn and the prior production code restored, preserving the current auth store. The proposed source/test diff is retained in `ops/offline-paging-candidate.patch` for review, not enabled in production.
+Baileys 6.7.24 sends only one `offline_batch count=100` on `offline_preview`. A bounded continuation was tested and deployed temporarily to request the next batch after idle. It completed the actual offline batch, but exposed a transport fault: CPU was approximately 118%, HTTP health requests exceeded five seconds, and connections closed with 428/408 and reconnected. It did not recover the acceptance message. The candidate was withdrawn and the prior production code restored, preserving the current auth store. The same CPU/HTTP fault persisted after rollback, so paging is not established as its cause. The proposed source/test diff is retained in `ops/offline-paging-candidate.patch` for review, not enabled in production (zero-context archival diff).
 
 Regression tests cover incomplete batches, live/offline-zero traffic, socket replacement, request limits, transport failure, and release of 104 buffered upserts using the actual installed event-buffer implementation in an isolated production-image container.
 
 Upstream context: [Baileys issue 2810](https://github.com/WhiskeySockets/Baileys/issues/2810). Runtime measurements above, rather than the issue alone, justify the narrow repair.
+
+## Verified Signal queue starvation
+
+After rollback, live V8 CPU stack snapshots repeatedly stopped in `libsignal/src/session_cipher.js:fillMessageKeys` / `crypto.calculateMAC`. A scalar-only pause captured a requested counter of 1114 against a stored counter of 10. No key material was inspected or printed. The `libsignal@6.0.0` queue resolves and starts successive jobs through microtasks without giving network I/O a turn. A regression test against the original installed queue reproduced starvation of a network heartbeat during a burst of crypto jobs, while preserving task order.
+
+The pinned fairness patch yields through `setImmediate` only after each complete Signal job, keeping per-device FIFO, return values, rejection behavior and completed persistence unchanged. It changes no cryptographic operation, retry counter limit, key, ratchet or auth format. The same regression passes with the patched actual dependency; 18 targeted engine/dependency/queue tests pass in an isolated production-image container. The patch generator refuses any original queue SHA256 other than the audited `d581518bab0da98ddc71cd6616bab769e0de413ec007454b7d42804ee3f244f3`.
+
+Deployment uses a read-only bind for the generated `libsignal-queue-job.js` and the existing image, with the Compose file and original queue backed up. Rollback removes that bind/restores `compose-before-signal-fairness.yml` and recreates only Baileys, keeping the current session. Remove/review this version-specific override before any dependency upgrade. Live responsiveness and original-message recovery must be checked independently; the queue regression alone is not proof of handset delivery or the origin of this particular message's absence.
 
 ## Safety and conclusion
 

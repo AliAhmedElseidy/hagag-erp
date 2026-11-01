@@ -1,47 +1,20 @@
-commit d5420c728350924649dbd4964925c430634dbdc0
-Author: aliahmedelsaidy <aliahmedelsaidy@gmail.com>
-Date:   Sun Nov 1 17:21:04 2026 +0300
-
-    fix(whatsapp): continue stalled offline batches without touching auth
-
 diff --git a/tests/wa-engine.test.mjs b/tests/wa-engine.test.mjs
 index ed8898a..4b2cecb 100644
 --- a/tests/wa-engine.test.mjs
 +++ b/tests/wa-engine.test.mjs
-@@ -4,6 +4,7 @@ import fs from 'node:fs';
- import os from 'node:os';
- import path from 'node:path';
- import vm from 'node:vm';
+@@ -6,0 +7 @@ import vm from 'node:vm';
 +import { EventEmitter } from 'node:events';
- import * as safety from '../wa-safety.mjs';
- 
- class Cache {
-@@ -45,7 +46,7 @@ function harness(t, registered = true) {
-     makeCacheableSignalKeyStore: (keys, logger, cache) => ({ keys, cache }),
-     makeWASocket(config) {
-       const events = new Map();
+@@ -48 +49 @@ function harness(t, registered = true) {
 -      const socket = { config, events, user: { id: '201000000000:1@s.whatsapp.net' }, end() {}, ws: { close() {} },
 +      const socket = { config, events, user: { id: '201000000000:1@s.whatsapp.net' }, end() {}, ws: Object.assign(new EventEmitter(), { close() {} }),
-         ev: { on(k, fn) { events.set(k, fn); }, removeAllListeners() { events.clear(); } },
-         requestPairingCode: async () => '12345678', sendMessage: async jid => ({ key: { id: 'OUT-1', remoteJid: jid, fromMe: true }, message: { conversation: 'reply' } }) };
-       sockets.push(socket); return socket;
 diff --git a/tests/wa-installed.test.mjs b/tests/wa-installed.test.mjs
 index 796cf08..f598ded 100644
 --- a/tests/wa-installed.test.mjs
 +++ b/tests/wa-installed.test.mjs
-@@ -5,6 +5,8 @@ import fs from 'node:fs/promises';
- import path from 'node:path';
- import os from 'node:os';
- import { createRequire } from 'node:module';
+@@ -7,0 +8,2 @@ import { createRequire } from 'node:module';
 +import { EventEmitter } from 'node:events';
 +import { drainOfflineBatches } from '../wa-safety.mjs';
- const require = createRequire('/app/package.json');
- const baileys = await import(require.resolve('@whiskeysockets/baileys'));
- const { default: NodeCache } = await import(require.resolve('node-cache'));
-@@ -31,3 +33,26 @@ test('installed BufferJSON round-trips retry media keys', () => {
-   assert.deepEqual(Buffer.from(decoded.imageMessage.mediaKey), Buffer.from([1, 3, 5]));
-   assert.deepEqual(Buffer.from(decoded.imageMessage.fileSha256), Buffer.from([2, 4]));
- });
+@@ -33,0 +36,23 @@ test('installed BufferJSON round-trips retry media keys', () => {
 +
 +test('installed event buffer releases an incomplete 104-message batch when the next batch ends', async () => {
 +  const { makeEventBuffer } = await import(path.join(path.dirname(require.resolve('@whiskeysockets/baileys')), 'Utils/event-buffer.js'));
@@ -136,45 +109,20 @@ diff --git a/wa-baileys-index.js b/wa-baileys-index.js
 index 8d67f1a..9d3e40c 100644
 --- a/wa-baileys-index.js
 +++ b/wa-baileys-index.js
-@@ -1,5 +1,5 @@
- import express from 'express';
+@@ -2 +2 @@ import express from 'express';
 -import { canonicalJid, sameConversation, validRecipient, tokenMatches, messageCacheKey, webhookAccepted, retryKind, serviceDiagnostics } from './wa-safety.mjs';
 +import { canonicalJid, sameConversation, validRecipient, tokenMatches, messageCacheKey, webhookAccepted, retryKind, serviceDiagnostics, drainOfflineBatches } from './wa-safety.mjs';
- import pino from 'pino';
- import fs from 'fs';
- import path from 'path';
-@@ -107,6 +107,7 @@ const initMutex = new Mutex();
- let reconnectTimer = null;
- 
- let sock = null;
+@@ -109,0 +110 @@ let sock = null;
 +let stopOfflineDrain = () => {};
- let qrCodeData = null;
- let qrCodeDataUrl = null;
- let connectedPhone = null;
-@@ -331,6 +332,7 @@ function cancelReconnectTimer() {
- 
- async function closeExistingSocket(reason = 'Close request') {
-   cancelReconnectTimer();
+@@ -333,0 +335 @@ async function closeExistingSocket(reason = 'Close request') {
 +  stopOfflineDrain();
-   if (sock) {
-     try {
-       addLog('info', `[SocketManager] Closing existing socket: ${reason}`);
-@@ -524,6 +526,7 @@ async function initBaileysSocket(reason = 'Startup') {
-       });
- 
-       const activeSocket = sock;
+@@ -526,0 +529 @@ async function initBaileysSocket(reason = 'Startup') {
 +      stopOfflineDrain = drainOfflineBatches(activeSocket, { isCurrent: () => sock === activeSocket, log: addLog });
-       sock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => recordMapping(lid, jid));
-       sock.ev.on('contacts.upsert', contacts => {
-         for (const contact of contacts || []) {
 diff --git a/wa-safety.mjs b/wa-safety.mjs
 index 6075fca..126244e 100644
 --- a/wa-safety.mjs
 +++ b/wa-safety.mjs
-@@ -70,3 +70,50 @@ export function retryKind(parameters = []) {
-   if (text.includes('no session')) return 'missing_session';
-   return 'undecrypted';
- }
+@@ -72,0 +73,47 @@ export function retryKind(parameters = []) {
 +
 +// Baileys 6.7.24 requests only one offline batch. A missing terminator can
 +// leave decoded messages/receipts buffered indefinitely on an open socket.

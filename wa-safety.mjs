@@ -54,7 +54,7 @@ export function tokenMatches(expected, supplied) {
 export function messageCacheKey(key) {
   if (!key?.id || !key.remoteJid) return null;
   return crypto.createHash('sha256').update(JSON.stringify([
-    canonicalJid(key.remoteJid), key.id, Boolean(key.fromMe), canonicalJid(key.participant)
+    canonicalJid(key.remoteJid), key.id, Boolean(key.fromMe), key.fromMe ? '' : canonicalJid(key.participant)
   ])).digest('hex');
 }
 

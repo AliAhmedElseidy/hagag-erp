@@ -17,7 +17,7 @@ No WhatsApp unlink, pairing reset, Signal key deletion, credential rotation, or 
 - API token is configured in the encrypted Hub Password field and Node environment; existing authenticated status request returned HTTP 200. Values were not printed.
 - MariaDB query, both Redis PINGs, HTTPS redirect, two workers, and scheduler checks passed.
 - Baileys binds to host loopback port 3001, shares `frappe_docker_default`, persists `/app/session`, and has `unless-stopped` policy. No configured Docker healthcheck existed.
-- Resource snapshot: 68 GB available on root disk; approximately 5.7 GB available RAM; 2 GB configured swap was not assumed — actual swap was 8 GB with about 1.5 GB used.
+- Resource snapshot: 68 GB available on root disk; approximately 5.7 GB available RAM; 8 GB swap with about 1.5 GB used.
 
 ## Findings and changes
 
@@ -31,6 +31,21 @@ No WhatsApp unlink, pairing reset, Signal key deletion, credential rotation, or 
 8. The legacy invoice sender retained another embedded token. All active WhatsApp paths now use the encrypted Hub token; missing configuration fails closed. Query-string authentication is removed. Provider keys are not put in Gemini URLs. Library console objects are reduced to diagnostic metadata to avoid dumping Signal secrets.
 9. Inbox now sees bot replies as Outgoing rows, fetches the latest page in chronological order, supports group/LID identities and takeover, polls while visible, and renders delivery states separately. Untrusted contact names no longer enter inline JavaScript. Added filters and responsive RTL layout.
 10. Logs/dashboard now surface transport, webhook and decrypt counters; diagnostic versions/storage state come from the running service. Unknown backup/restart information is shown as unverified, not invented.
+11. The Gemini display-name mapping silently changed `Gemini 3.5 Flash Lite` to `gemini-2.5-flash`. The live provider returned 404 for that request. Google's authenticated model listing confirmed the selected `gemini-3.5-flash-lite` is available; the corrected model returned a real response without fallback. Empty/thought-only provider output is not sent as a reply.
+
+## Deployment verification and outstanding acceptance
+
+The reviewed branch was deployed under the owner's later explicit authorization. Code/config, database and stopped-session backups exist. The same authentication identity survived each controlled restart; no session restore/reset or key deletion occurred. Maintenance was restored to off. Active Python settings and authorized contacts were retained.
+
+Live checks passed for Dashboard, conversation list/thread, service diagnostics, Baileys log summaries, Frappe error summaries, Guest denial, reversible takeover on an unused synthetic identity, and recovery-job registration. The recovery job required synchronization after clearing the old Frappe hook cache. The scheduler container itself does not bind the app source; its database-backed job is enqueued to workers, which do bind the repaired source. No scheduler image was rebuilt.
+
+The authenticated Chrome session was used to verify the rendered Dashboard and Inbox: transport failures are visible, contact selection works, the test outgoing bubble appears, and Pending is rendered as a clock. Full media previews and host-level backup/restart polling remain outside this patch; unknown values are displayed explicitly.
+
+A real ERP-to-Saudi test was accepted as WhatsApp ID `3EB035B53DB2630FF0381A`, routed using the existing configured LID and recorded in the Inbox. Its observed state remains Pending; there is no delivery confirmation. No subsequent inbound acceptance phrase has been observed. The owner must still confirm physical handset delivery and send the real inbound phrase.
+
+Residual decrypt errors were still observed after rollout: recent non-self examples were an unregistered group; self examples were companion synchronization for the bot LID. They remain visible and are not declared repaired. A missing JID on an offline protocol node exposed an integration bug in the new ignored-channel predicate; a null-safe fix and regression test were applied before final verification.
+
+Final focused suite: 14 engine tests, 18 Python behavior tests, plus 2 installed-dependency tests in an isolated production-image container. Live SQL isolation checks inserted temporary WhatsApp log rows in a transaction and rolled them back; they sent no message and wrote no accounting document.
 
 ## Runtime evidence and limits
 

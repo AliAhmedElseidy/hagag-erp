@@ -173,3 +173,9 @@ test('ignored-channel predicate accepts absent routing metadata from offline pro
   assert.equal(ignore('123@newsletter'), true);
   assert.equal(ignore('123@lid'), false);
 });
+
+test('outbound group retry receipts can supply a participant without changing the stored message identity', () => {
+  const key = { id: 'GROUP-OUT', remoteJid: '123-456@g.us', fromMe: true };
+  assert.equal(safety.messageCacheKey(key), safety.messageCacheKey({ ...key, participant: '789@lid' }));
+  assert.notEqual(safety.messageCacheKey({ ...key, fromMe: false }), safety.messageCacheKey({ ...key, fromMe: false, participant: '789@lid' }));
+});

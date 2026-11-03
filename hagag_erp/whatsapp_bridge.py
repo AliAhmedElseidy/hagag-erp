@@ -564,15 +564,17 @@ def receive_baileys_event():
 
 	# ── 1.1 Handle Delivery Status Updates ────────────────────────────────────
 	if event_type in ("status_update", "messages.update"):
-		msg_id = payload.get("message_id")
-		raw_status = payload.get("status")
+		msg_id = payload.get("message_id") or payload.get("msg_id")
+		raw_status = payload.get("status") if payload.get("status") is not None else payload.get("status_code")
 		status_map = {
+			0: "Failed",
 			1: "Pending",
 			2: "Sent",
 			3: "Delivered",
-			4: "Read"
+			4: "Read",
+			5: "Read"
 		}
-		delivery_status = status_map.get(raw_status, "Sent")
+		delivery_status = payload.get("delivery_status") or status_map.get(raw_status, "Sent")
 		if msg_id:
 			try:
 				frappe.db.sql("""

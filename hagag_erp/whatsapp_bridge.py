@@ -1428,18 +1428,53 @@ def send_test_whatsapp_message(recipient: str, message: str) -> dict:
 def simulate_whatsapp_message(text: str, sender_phone: str = "966569589664") -> dict:
 	"""
 	AI & Natural Language Simulator (Dry Run Mode).
-	Evaluates a message without committing any documents to the database.
+	Evaluates a message across all five Elsaidy ERP accounting & custody intents
+	without committing any documents to the database.
 	"""
-	hub = get_hub_settings()
 	clean_text = (text or "").strip()
 	if not clean_text:
 		return {"status": "error", "message": "نص الرسالة مطلوب للمحاكاة"}
 
+	# 1. Check Accounting & Custody Intents First (Intents A, B, C, D, E)
+	from hagag_erp.custody_service import (
+		simulate_custody_workflow,
+		classify_accounting_intent
+	)
+
+	parsed_intent = classify_accounting_intent(clean_text)
+	if parsed_intent and parsed_intent.get("intent"):
+		sim_res = simulate_custody_workflow(
+			text=clean_text,
+			sender_phone=sender_phone,
+			user_id=frappe.session.user
+		)
+		if sim_res.get("status") == "success":
+			return {
+				"status": "ok",
+				"mode": "Dry Run Simulation",
+				"detected_intent": sim_res.get("intent_name"),
+				"intent_code": sim_res.get("intent"),
+				"employee_id": sim_res.get("employee_id"),
+				"employee_name": sim_res.get("employee_name"),
+				"verified_identity_source": sim_res.get("verified_identity_source"),
+				"payment_method": sim_res.get("payment_method"),
+				"selected_accounts": sim_res.get("selected_accounts"),
+				"vat_classification": sim_res.get("vat_classification"),
+				"proposed_document_type": sim_res.get("proposed_document_type"),
+				"simulated_lines": sim_res.get("proposed_lines"),
+				"actual_live_posted_balance": sim_res.get("actual_live_posted_balance"),
+				"simulated_post_approval_impact": sim_res.get("simulated_post_approval_impact"),
+				"simulated_reply": sim_res.get("formatted_preview") or sim_res.get("summary_text"),
+				"explanation": sim_res.get("explanation")
+			}
+
+	# 2. Fallback to AI Assistant for general inquiries
+	hub = get_hub_settings()
 	bot_mode = (hub.bot_mode if hub and hub.bot_mode else "AI + Accounting Hybrid")
 	enable_ai = cint(hub.enable_ai_reply if hub else 0)
 	ai_provider = (hub.ai_provider if hub and hub.ai_provider else "Gemini")
 	ai_model = (hub.ai_model if hub and hub.ai_model else "gemini-2.5-flash")
-	
+
 	ai_api_key = None
 	if hub and hasattr(hub, "get_password"):
 		try:
@@ -1449,51 +1484,7 @@ def simulate_whatsapp_message(text: str, sender_phone: str = "966569589664") -> 
 
 	ai_system_prompt = hub.ai_system_prompt if hub else "أنت المساعد المالي لمنظومة الصعيدي."
 
-	parsed_expense = parse_expense_from_text(clean_text)
-
-	if parsed_expense and bot_mode != "AI Assistant Only":
-		from hagag_erp.tax_engine import calculate_zatca_tax
-		tax_calc = calculate_zatca_tax(parsed_expense["amount"], is_inclusive=parsed_expense["is_inclusive"])
-
-		simulated_lines = [
-			{"account": hub.default_expense_account or "مصاريف عامة", "debit": float(tax_calc["net_amount"]), "credit": 0.0},
-			{"account": hub.default_vat_account or "ضريبة القيمة المضافة 15%", "debit": float(tax_calc["tax_amount"]), "credit": 0.0},
-			{"account": "صندوق النقدية / العهدة", "debit": 0.0, "credit": float(tax_calc["total_amount"])}
-		]
-
-		simulated_reply = (
-			f"✅ *تم تسجيل المصروف بنجاح (محاكاة تجريبية - Dry Run) ✅*\n"
-			f"━━━━━━━━━━━━━━━━━━━\n"
-			f"🔖 *رقم القيد المقترح:* `JV-SIMULATED-0001`\n"
-			f"💵 *المبلغ الصافي:* {tax_calc['net_amount']:,.2f} ر.س\n"
-			f"🏛️ *ضريبة القيمة المضافة (15%):* {tax_calc['tax_amount']:,.2f} ر.س\n"
-			f"💰 *المجموع الإجمالي:* {tax_calc['total_amount']:,.2f} ر.س\n"
-			f"👤 *المسجّل:* {sender_phone}\n"
-			f"━━━━━━━━━━━━━━━━━━━\n"
-			f"💡 *حالة العملية:* محاكاة ناجحة 100% دون تسجيل في قاعدة البيانات."
-		)
-
-		return {
-			"status": "ok",
-			"mode": "Dry Run Simulation",
-			"detected_intent": "Expense Record (ZATCA 15%)",
-			"parsed_entities": {
-				"amount": float(parsed_expense["amount"]),
-				"net_amount": float(tax_calc["net_amount"]),
-				"tax_amount": float(tax_calc["tax_amount"]),
-				"total_amount": float(tax_calc["total_amount"]),
-				"is_inclusive": parsed_expense["is_inclusive"],
-				"vendor": parsed_expense["vendor"] or "غير محدد"
-			},
-			"simulated_document": {
-				"doctype": "Journal Entry",
-				"docstatus": 0,
-				"lines": simulated_lines
-			},
-			"simulated_reply": simulated_reply
-		}
-
-	elif enable_ai and ai_api_key and bot_mode != "Accounting Commands Only":
+	if enable_ai and ai_api_key and bot_mode != "Accounting Commands Only":
 		simulated_ai_reply = call_ai_api(
 			user_message=clean_text,
 			provider=ai_provider,
@@ -1509,12 +1500,9 @@ def simulate_whatsapp_message(text: str, sender_phone: str = "966569589664") -> 
 			"simulated_reply": simulated_ai_reply
 		}
 
-	else:
-		fallback_reply = generate_local_fallback_reply(clean_text)
-		return {
-			"status": "ok",
-			"mode": "Dry Run Simulation",
-			"detected_intent": "General Chat / Local Fallback",
-			"parsed_entities": {},
-			"simulated_reply": fallback_reply
-		}
+	return {
+		"status": "ok",
+		"mode": "Dry Run Simulation",
+		"detected_intent": "General Message",
+		"simulated_reply": generate_local_fallback_reply(clean_text)
+	}

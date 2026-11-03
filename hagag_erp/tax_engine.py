@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Elsaidy ERP - Central Saudi ZATCA Tax & Contracting Engine
 ===========================================================
@@ -214,15 +214,15 @@ def evaluate_vat_eligibility_and_split(
         # Check Fuel & Vehicles Rule (5120 / fuel keywords)
         is_fuel = any(k in acc_lower for k in ["5120", "وقود", "بنزين", "ديزل", "محروقات", "fuel", "gasoline", "diesel"])
 
-        if is_fuel or usage_type in ["commercial_equipment", "restricted_vehicle"]:
-            if usage_type == "commercial_equipment" and has_valid_tax_invoice:
+        if is_fuel or usage_type in ["commercial", "commercial_equipment", "restricted_vehicle", "passenger_restricted"]:
+            if usage_type in ["commercial", "commercial_equipment"] and has_valid_tax_invoice:
                 eligibility_status = "approved_recoverable"
                 target_vat_account = tax_accounts["recoverable_vat"]
                 debit_lines = [
                     {"account": acc, "amount": base_amount, "description": "مصروف وقود/تشغيل معدات تجارية"},
                     {"account": target_vat_account, "amount": vat_amount, "description": "ضريبة مدخلات 15% مستردة نظامياً (معدة تجارية)"}
                 ]
-            elif usage_type == "restricted_vehicle":
+            elif usage_type in ["restricted_vehicle", "passenger_restricted"]:
                 eligibility_status = "non_recoverable"
                 if policy == "designated_expense_account" or policy == "expense_account":
                     target_vat_account = tax_accounts["non_recoverable_vat"]

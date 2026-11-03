@@ -348,6 +348,154 @@ CUSTOM_FUNCTIONS = [
                 }
             }
         }
+    },
+    {
+        "name": "get_employee_custody_report",
+        "function_name": "get_employee_custody_report",
+        "description": "يجلب تقرير كشف تسوية ومطابقة العهد والسلف الشهرية للموظف، مع الفصل الصارم بين الأرصدة المقيدة بالدفاتر (GL Entry) والمسودات غير المرحلة، والفصل التام بين عهد المواقع والسلف الشخصية.",
+        "type": "Custom Function",
+        "function_path": "hagag_erp.ai_tools.get_employee_custody_report",
+        "reference_doctype": "Employee",
+        "params": {
+            "type": "object",
+            "properties": {
+                "employee": {
+                    "type": "string",
+                    "description": "اسم الموظف أو رقمه الوظيفي (اختياري، الافتراضي موظف الجلسة)"
+                },
+                "from_date": {
+                    "type": "string",
+                    "description": "من تاريخ YYYY-MM-DD"
+                },
+                "to_date": {
+                    "type": "string",
+                    "description": "إلى تاريخ YYYY-MM-DD"
+                },
+                "company": {
+                    "type": "string",
+                    "description": "اسم الشركة"
+                }
+            }
+        }
+    },
+    {
+        "name": "simulate_employee_custody_workflow",
+        "function_name": "simulate_employee_custody_workflow",
+        "description": "محاكي العمليات المالية (Dry Run) لمعاينة أي عملية عهدة، مصروف، أو سلفة راتب قبل إنشائها، مع توضيح القيود والحسابات والأثر المالي دون حفظ أي بيانات.",
+        "type": "Custom Function",
+        "function_path": "hagag_erp.ai_tools.simulate_employee_custody_workflow",
+        "reference_doctype": "Journal Entry",
+        "params": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "نص المعاملة باللغة العربية"
+                },
+                "sender_phone": {
+                    "type": "string",
+                    "description": "رقم هاتف المرسل للتحقق من هوية الموظف"
+                },
+                "company": {
+                    "type": "string",
+                    "description": "اسم الشركة"
+                }
+            },
+            "required": ["text"]
+        }
+    },
+    {
+        "name": "record_employee_custody_expense",
+        "function_name": "record_employee_custody_expense",
+        "description": "ينشئ مسودة قيد يومية متوازن لتسوية مصروف مدفوع من عهدة موظف، مع احتساب ضريبة القيمة المضافة ZATCA 15% وحساب العهد النقدية 1120 كطرف دائن بدون فرض طرف موظف على حساب النقد.",
+        "type": "Custom Function",
+        "function_path": "hagag_erp.ai_tools.record_employee_custody_expense",
+        "reference_doctype": "Journal Entry",
+        "params": {
+            "type": "object",
+            "properties": {
+                "employee": {
+                    "type": "string",
+                    "description": "اسم الموظف أو الرقم الوظيفي"
+                },
+                "amount": {
+                    "type": "number",
+                    "description": "مبلغ المصروف الإجمالي"
+                },
+                "expense_category": {
+                    "type": "string",
+                    "description": "تصنيف المصروف: fuel (وقود), maintenance (صيانة), project_materials (مواد ومهمات), etc."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "شرح البند أو الفاتورة"
+                },
+                "is_inclusive": {
+                    "type": "integer",
+                    "description": "1 إذا كان المبلغ شاملاً الضريبة 15%، 0 إذا كان غير شامل"
+                },
+                "vehicle_type": {
+                    "type": "string",
+                    "description": "commercial_equipment (معدة موقع/مولد) أو passenger_restricted (سيارة ركوب)"
+                }
+            },
+            "required": ["amount"]
+        }
+    },
+    {
+        "name": "record_salary_advance_deduction",
+        "function_name": "record_salary_advance_deduction",
+        "description": "ينشئ مسودة استقطاع سلفة راتب (Additional Salary) في نظام HRMS لخصمها من مسير الرواتب القادم للموظف، مع منع التكرار والفصل عن عهد المواقع.",
+        "type": "Custom Function",
+        "function_path": "hagag_erp.ai_tools.record_salary_advance_deduction",
+        "reference_doctype": "Additional Salary",
+        "params": {
+            "type": "object",
+            "properties": {
+                "employee": {
+                    "type": "string",
+                    "description": "اسم الموظف أو رقمه الوظيفي"
+                },
+                "amount": {
+                    "type": "number",
+                    "description": "مبلغ السلفة الشخصية المراد خصمها"
+                },
+                "payroll_date": {
+                    "type": "string",
+                    "description": "تاريخ استحقاق الراتب YYYY-MM-DD"
+                },
+                "user_remark": {
+                    "type": "string",
+                    "description": "بيان السلفة"
+                }
+            },
+            "required": ["employee", "amount"]
+        }
+    },
+    {
+        "name": "inspect_and_propose_jv_correction",
+        "function_name": "inspect_and_propose_jv_correction",
+        "description": "يفحص قيد اليومية ACC-JV-2026-00005 في حالته كمسودة ويقدم المقارنة المحاسبية لتصحيح الضريبة والعهد دون المساس بالدفاتر إلا بعد الموافقة.",
+        "type": "Custom Function",
+        "function_path": "hagag_erp.ai_tools.inspect_and_propose_jv_correction",
+        "reference_doctype": "Journal Entry",
+        "params": {
+            "type": "object",
+            "properties": {
+                "company": {
+                    "type": "string",
+                    "description": "اسم الشركة"
+                },
+                "apply": {
+                    "type": "integer",
+                    "description": "0 للمعاينة فقط، 1 لتطبيق التعديل على المسودة"
+                },
+                "strategy": {
+                    "type": "string",
+                    "description": "pending_review (ضريبة معلقة 1520) أو commercial (ضريبة مستردة 1510)"
+                }
+            }
+        }
     }
 ]
 
@@ -387,14 +535,20 @@ https://erp.elsaidy.org/app/journal-entry/ACC-JV-2026-00001
   * أصل المبلغ الخاضع للضريبة (Base Amount) = المبلغ الإجمالي / 1.15
   * ضريبة القيمة المضافة 15% (VAT Amount) = المبلغ الإجمالي - أصل المبلغ
   * الطرف المدين 1: حساب المصروف الصافي (مثل: 5120 - مصروف الوقود والمحروقات - Rkn)
-  * الطرف المدين 2: 1510 - ضريبة القيمة المضافة للمدخلات 15% - Rkn بقيمة الضريبة
+  * الطرف المدين 2: 1510 - ضريبة القيمة المضافة للمدخلات 15% - Rkn أو 1520 قيد المراجعة
   * الطرف الدائن: 1110 - النقدية في الصندوق - Rkn أو 1120 - عهد نقدية للمهندسين والمشرفين - Rkn
 
 5. تسوية العهد الميدانية (Site Custody Settlements):
-- عند طلب تسوية عهدة موقع أو مهندس تحتوي على عدة بنود مصروفات، استخدم أداة create_custody_settlement_entry فوراً لإنشاء قيد اليومية متعدد البنود وتوزيع الضرائب وتصفية العهدة بدقة.
+- عند طلب تسوية عهدة موقع أو مهندس، استخدم create_custody_settlement_entry أو record_employee_custody_expense لإنشاء قيد اليومية كمسودة مع التحقق من الحسابات وتوزيع الضرائب وتصفية العهدة بدقة.
+- حساب العهد النقدية 1120 هو حساب نقدية (Cash)، ولا يجوز محاسبياً أو في نظام ERPNext v16 وضع طرف موظف (Party) عليه.
 
-6. التقارير المالية اللحظية:
-- عند طلب كشف السيولة أو ملخص مالي للمشروع، استخدم get_project_financial_summary لعرض السيولة والإيرادات والمصروفات والضريبة.""",
+6. الفصل التام بين عهد المواقع والسلف الشخصية (Custody vs Salary Advance):
+- عهد المواقع (حساب 1120) أموال للشركة مخصصة لمصروفات الموقع ولا تخصم تلقائياً من الراتب.
+- السلف الشخصية (مسحوبات شخصية) تسجل عبر record_salary_advance_deduction في مسير الرواتب (Additional Salary) وتستقطع حصراً من راتب الموظف.
+
+7. الفصل بين الأرصدة المقيدة بالدفاتر والمسودات:
+- اعتمد حصراً على حركات الأستاذ العام (GL Entry) المرحّلة لحساب رصيد العهدة الفعلي.
+- لا تعامل مسودات القيود (Draft) كحركات دفترية مرحلة، وأظهر إجمالي المسودات بشكل منفصل تماماً.""",
         "functions": [
             "get_chart_of_accounts_tree",
             "get_cost_centers_tree",
@@ -411,7 +565,12 @@ https://erp.elsaidy.org/app/journal-entry/ACC-JV-2026-00001
             "get_customer_list",
             "get_supplier_list",
             "get_employee_advance_list",
-            "get_expense_claim_list"
+            "get_expense_claim_list",
+            "get_employee_custody_report",
+            "simulate_employee_custody_workflow",
+            "record_employee_custody_expense",
+            "record_salary_advance_deduction",
+            "inspect_and_propose_jv_correction"
         ]
     },
     "Sales": {

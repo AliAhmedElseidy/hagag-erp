@@ -1343,3 +1343,319 @@ def get_project_financial_summary(project=None, company=None):
         "vat_payable": net_vat_payable,
         "message": clean_msg
     }
+
+
+# -------------------------------------------------------------------------
+# UNIFIED EMPLOYEE CUSTODY, ADVANCES & PAYROLL SETTLEMENT (PHASES 2, 5, 6, 7)
+# -------------------------------------------------------------------------
+
+@frappe.whitelist()
+def get_employee_custody_report(
+    employee: str = None,
+    from_date: str = None,
+    to_date: str = None,
+    company: str = None
+) -> dict:
+    """
+    Whitelisted read-only report for Employee Custody, Personal Advances and Payroll Settlement.
+    Strictly separates posted GL ledger balances from unposted draft documents.
+    """
+    from hagag_erp.custody_service import (
+        resolve_employee,
+        generate_employee_settlement_report,
+        format_settlement_report_arabic,
+        verify_user_authorization
+    )
+
+    if not verify_user_authorization():
+        frappe.throw(_("ليس لديك صلاحية للاطلاع على تقارير العهد والرواتب."), frappe.PermissionError)
+
+    resolved = resolve_employee(identifier=employee, user_id=frappe.session.user, company=company)
+    emp_id = resolved.get("employee") if resolved.get("status") == "success" else employee
+
+    report = generate_employee_settlement_report(
+        employee=emp_id,
+        from_date=from_date,
+        to_date=to_date,
+        company=company
+    )
+
+    if report.get("status") == "error":
+        return report
+
+    report["formatted_message"] = format_settlement_report_arabic(report)
+    return report
+
+
+@frappe.whitelist()
+def simulate_employee_custody_workflow(
+    text: str,
+    sender_phone: str = "966569589664",
+    company: str = None,
+    has_valid_invoice: bool = True,
+    vehicle_type: str = "commercial_equipment"
+) -> dict:
+    """
+    True Dry-Run Simulator for WhatsApp & Raven AI.
+    Previews any of the 5 intents without modifying the database or submitting documents.
+    """
+    from hagag_erp.custody_service import simulate_custody_workflow, verify_user_authorization
+
+    if not verify_user_authorization():
+        frappe.throw(_("ليس لديك صلاحية لتشغيل محاكي العمليات المالية."), frappe.PermissionError)
+
+    return simulate_custody_workflow(
+        text=text,
+        sender_phone=sender_phone,
+        user_id=frappe.session.user,
+        company=company,
+        has_valid_invoice=has_valid_invoice,
+        vehicle_type=vehicle_type
+    )
+
+
+@frappe.whitelist()
+def inspect_and_propose_jv_correction(
+    company: str = None,
+    apply: int = 0,
+    strategy: str = "pending_review"
+) -> dict:
+    """
+    Inspects Journal Entry ACC-JV-2026-00005 without changes first.
+    If apply=1 and docstatus=0, applies the verified draft correction.
+    """
+    from hagag_erp.custody_service import (
+        inspect_acc_jv_2026_00005,
+        apply_jv_draft_correction,
+        verify_user_authorization
+    )
+
+    if not verify_user_authorization():
+        frappe.throw(_("ليس لديك صلاحية لمراجعة أو تصحيح القيود المحاسبية."), frappe.PermissionError)
+
+    if not frappe.utils.cint(apply):
+        return inspect_acc_jv_2026_00005(company=company)
+
+    return apply_jv_draft_correction(apply=True, strategy=strategy)
+
+
+@frappe.whitelist()
+def record_employee_custody_expense(
+    employee: str = None,
+    amount: float = None,
+    expense_category: str = "fuel",
+    description: str = None,
+    is_inclusive: int = 1,
+    has_valid_invoice: int = 1,
+    vehicle_type: str = "commercial_equipment",
+    company: str = None,
+    operation_id: str = None
+) -> dict:
+    """
+    Controlled Draft creation for employee custody work expense (Intent B).
+    Creates a balanced draft Journal Entry (docstatus=0).
+    Never submits automatically.
+    """
+    from hagag_erp.custody_service import (
+        resolve_employee,
+        get_verified_account_for_category,
+        get_verified_payment_account,
+        verify_user_authorization
+    )
+    from hagag_erp.tax_engine import (
+        get_target_company,
+        get_company_tax_accounts,
+        evaluate_vat_eligibility_and_split,
+        to_decimal
+    )
+
+    if not verify_user_authorization():
+        frappe.throw(_("ليس لديك صلاحية لتسجيل مصروفات العهد."), frappe.PermissionError)
+
+    if not amount or flt(amount) <= 0:
+        return {"status": "error", "message": "يجب تحديد مبلغ المصروف بشكل صحيح."}
+
+    comp_name, abbr = get_target_company(company)
+    emp_res = resolve_employee(identifier=employee, user_id=frappe.session.user, company=comp_name)
+    if emp_res.get("status") != "success":
+        return emp_res
+
+    emp_id = emp_res["employee"]
+    emp_name = emp_res["employee_name"]
+
+    # Prevent duplicate submission via operation_id
+    if operation_id:
+        existing_jv = frappe.db.get_value("Journal Entry", {"user_remark": ["like", f"%[{operation_id}]%"]}, "name")
+        if existing_jv:
+            return {
+                "status": "success",
+                "message": f"العملية مسجلة مسبقاً برقم القيد {existing_jv}.",
+                "journal_entry": existing_jv,
+                "is_duplicate": True
+            }
+
+    exp_account = get_verified_account_for_category(expense_category, comp_name)
+    custody_account, _ = get_verified_payment_account("custody", comp_name)
+    tax_accounts = get_company_tax_accounts(comp_name)
+
+    tax_eval = evaluate_vat_eligibility_and_split(
+        amount=to_decimal(amount),
+        account_code=exp_account,
+        is_taxable=True,
+        amount_basis="inclusive" if frappe.utils.cint(is_inclusive) else "exclusive",
+        usage_type="commercial" if vehicle_type == "commercial_equipment" else "passenger_restricted",
+        has_valid_tax_invoice=bool(frappe.utils.cint(has_valid_invoice)),
+        company=comp_name
+    )
+
+    net_exp = tax_eval["net_expense"]
+    tax_eligible = tax_eval["tax_eligible"]
+    tax_pending = tax_eval["tax_pending"]
+    gross_total = tax_eval["gross_amount"]
+
+    je = frappe.new_doc("Journal Entry")
+    je.voucher_type = "Journal Entry"
+    je.company = comp_name
+    je.posting_date = nowdate()
+
+    op_tag = f" [{operation_id}]" if operation_id else ""
+    user_rem = description or f"تسوية مصروف {expense_category} من عهدة {emp_name} ({emp_id})"
+    je.user_remark = f"{user_rem} - إجمالي {float(gross_total):,.2f} ريال{op_tag}"
+
+    # Debit Expense
+    je.append("accounts", {
+        "account": exp_account,
+        "debit_in_account_currency": float(net_exp),
+        "credit_in_account_currency": 0.0,
+        "debit": float(net_exp),
+        "credit": 0.0,
+        "user_remark": user_rem
+    })
+
+    # Debit VAT (1510 or 1520)
+    if tax_eligible > Decimal("0.00"):
+        je.append("accounts", {
+            "account": tax_accounts["recoverable_vat"],
+            "debit_in_account_currency": float(tax_eligible),
+            "credit_in_account_currency": 0.0,
+            "debit": float(tax_eligible),
+            "credit": 0.0,
+            "user_remark": "ضريبة مدخلات 15% مستردة - ZATCA"
+        })
+    elif tax_pending > Decimal("0.00"):
+        je.append("accounts", {
+            "account": tax_accounts["pending_vat"],
+            "debit_in_account_currency": float(tax_pending),
+            "credit_in_account_currency": 0.0,
+            "debit": float(tax_pending),
+            "credit": 0.0,
+            "user_remark": "ضريبة مدخلات معلقة قيد المراجعة الضريبية (المادة 50)"
+        })
+
+    # Credit Custody Account (1120) - Party MUST be None
+    je.append("accounts", {
+        "account": custody_account,
+        "debit_in_account_currency": 0.0,
+        "credit_in_account_currency": float(gross_total),
+        "debit": 0.0,
+        "credit": float(gross_total),
+        "user_remark": f"تسوية عهدة الموظف: {emp_name} ({emp_id})"
+    })
+
+    je.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    return {
+        "status": "success",
+        "docstatus": 0,
+        "journal_entry": je.name,
+        "message": f"تم إنشاء مسودة قيد تسوية عهدة رقم {je.name} بقيمة {float(gross_total):,.2f} ريال بنجاح (Draft - قيد المراجعة).",
+        "net_amount": float(net_exp),
+        "tax_amount": float(tax_eligible + tax_pending),
+        "total_amount": float(gross_total)
+    }
+
+
+@frappe.whitelist()
+def record_salary_advance_deduction(
+    employee: str,
+    amount: float,
+    payroll_date: str = None,
+    user_remark: str = None,
+    company: str = None,
+    operation_id: str = None
+) -> dict:
+    """
+    Controlled Draft creation for personal salary advance deduction (Intent D).
+    Creates an Additional Salary draft document in HRMS.
+    Never duplicates payroll deductions.
+    """
+    from hagag_erp.custody_service import resolve_employee, verify_user_authorization
+    from hagag_erp.tax_engine import get_target_company, to_decimal
+
+    if not verify_user_authorization():
+        frappe.throw(_("ليس لديك صلاحية لتسجيل استقطاعات الرواتب."), frappe.PermissionError)
+
+    if not amount or flt(amount) <= 0:
+        return {"status": "error", "message": "يجب تحديد مبلغ السلفة بشكل صحيح."}
+
+    comp_name, abbr = get_target_company(company)
+    emp_res = resolve_employee(identifier=employee, user_id=frappe.session.user, company=comp_name)
+    if emp_res.get("status") != "success":
+        return emp_res
+
+    emp_id = emp_res["employee"]
+    emp_name = emp_res["employee_name"]
+    p_date = payroll_date or nowdate()
+    dec_amt = to_decimal(amount)
+
+    # Check for duplicate deduction in the same payroll month
+    dup_filter = {
+        "employee": emp_id,
+        "company": comp_name,
+        "type": "Deduction",
+        "docstatus": ["in", [0, 1]],
+        "payroll_date": ["between", [frappe.utils.formatdate(p_date, "yyyy-mm-01"), p_date]]
+    }
+    if operation_id:
+        dup_filter["salary_component"] = "استقطاع سلفة (Loan/Advance Deduction)"
+
+    existing = frappe.get_all("Additional Salary", filters=dup_filter, fields=["name", "amount", "docstatus"])
+    for ex in existing:
+        if flt(ex.amount) == float(dec_amt):
+            return {
+                "status": "warning",
+                "message": f"يوجد استقطاع راتب مسجل بالفعل للموظف {emp_name} بنفس المبلغ في هذا الشهر ({ex.name}). لتفادي التكرار لم يتم إنشاء مستند جديد.",
+                "existing_additional_salary": ex.name,
+                "is_duplicate": True
+            }
+
+    salary_component = "استقطاع سلفة (Loan/Advance Deduction)"
+    if not frappe.db.exists("Salary Component", salary_component):
+        salary_component = "استقطاع سلف وعهد رواتب (Advance Deduction)"
+
+    add_sal = frappe.new_doc("Additional Salary")
+    add_sal.employee = emp_id
+    add_sal.company = comp_name
+    add_sal.salary_component = salary_component
+    add_sal.type = "Deduction"
+    add_sal.amount = float(dec_amt)
+    add_sal.payroll_date = p_date
+    add_sal.overwrite_salary_structure_amount = 0
+    op_note = f" [{operation_id}]" if operation_id else ""
+    add_sal.remark = (user_remark or f"سلفة شخصية تخصم من الراتب للموظف {emp_name}") + op_note
+
+    add_sal.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    return {
+        "status": "success",
+        "docstatus": 0,
+        "additional_salary": add_sal.name,
+        "message": f"تم إنشاء مسودة استقطاع راتب رقم {add_sal.name} بمبلغ {float(dec_amt):,.2f} ريال بنجاح (Draft - قيد المراجعة لمسير الرواتب).",
+        "employee": emp_id,
+        "employee_name": emp_name,
+        "amount": float(dec_amt),
+        "payroll_date": p_date
+    }
+

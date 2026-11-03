@@ -577,6 +577,7 @@ async def handle_ai_request_async(
 					# Execute multi-turn tool calling loop
 					max_tool_turns = 5
 					current_turn = 0
+					executed_tool_messages = []
 					raw_response = None
 					choice = None
 
@@ -595,7 +596,16 @@ async def handle_ai_request_async(
 							current_api_params["tools"] = tools_param
 							current_api_params["tool_choice"] = "auto"
 
-						response = await manager.client.chat.completions.create(**current_api_params)
+						try:
+							response = await manager.client.chat.completions.create(**current_api_params)
+						except Exception as api_err:
+							if executed_tool_messages:
+								frappe.log_error(
+									f"Subsequent LLM call failed after tool execution: {api_err}. Gracefully falling back to tool output.",
+									"Raven AI Graceful Fallback"
+								)
+								break
+							raise
 
 						if not response or not response.choices:
 							break
@@ -626,6 +636,17 @@ async def handle_ai_request_async(
 								if t_result is None:
 									t_result = json.dumps({"error": f"Tool '{t_name}' not found"})
 
+								# Extract human readable message if present
+								try:
+									if isinstance(t_result, dict) and t_result.get("message"):
+										executed_tool_messages.append(t_result["message"])
+									elif isinstance(t_result, str):
+										parsed_res = json.loads(t_result)
+										if isinstance(parsed_res, dict) and parsed_res.get("message"):
+											executed_tool_messages.append(parsed_res["message"])
+								except Exception:
+									pass
+
 								if not isinstance(t_result, str):
 									t_result = json.dumps(t_result, default=str)
 
@@ -640,7 +661,9 @@ async def handle_ai_request_async(
 							raw_response = choice.message.content
 							break
 
-					if not raw_response and choice and hasattr(choice, "message"):
+					if not raw_response and executed_tool_messages:
+						raw_response = "\n\n".join(executed_tool_messages)
+					elif not raw_response and choice and hasattr(choice, "message"):
 						raw_response = choice.message.content
 
 					# Check for custom <tool_call> format in the response
@@ -760,6 +783,12 @@ async def handle_ai_request_async(
 
 		error_details = traceback.format_exc()
 		frappe.log_error(f"AI Agent Error: {str(e)}\n\nTraceback:\n{error_details}", "Raven AI")
+		if "executed_tool_messages" in locals() and executed_tool_messages:
+			return {
+				"response": "\n\n".join(executed_tool_messages),
+				"success": True,
+				"provider": bot.model_provider if hasattr(bot, "model_provider") else "OpenAI",
+			}
 
 		return {
 			"response": "I encountered an error while processing your request.",

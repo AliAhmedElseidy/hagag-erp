@@ -171,6 +171,11 @@ def resolve_employee(
                 # Token containment
                 if query_tokens and all(tok in emp_name_norm for tok in query_tokens):
                     partial_matches.append(emp)
+                else:
+                    emp_tokens = [t for t in emp_name_norm.split() if len(t) > 2]
+                    matched_toks = [t for t in emp_tokens if t in norm_query]
+                    if len(matched_toks) >= 2 and emp not in partial_matches:
+                        partial_matches.append(emp)
 
             if len(exact_matches) == 1:
                 match = exact_matches[0]
@@ -1774,6 +1779,18 @@ def notify_employee_custody_event(doc, method=None) -> dict:
         else:
             balance_line = f"📊 *رصيد العهدة المقيد المتبقي:* `{posted_custody:,.2f}` ريال"
 
+        # Saudi Time (12-hour Asia/Riyadh format)
+        try:
+            import zoneinfo
+            from datetime import datetime as dt_cls
+            sa_tz = zoneinfo.ZoneInfo("Asia/Riyadh")
+            now_sa = dt_cls.now(sa_tz)
+            time_part = now_sa.strftime("%I:%M").lstrip("0")
+            period = "ص" if now_sa.strftime("%p") == "AM" else "م"
+            saudi_time = f"{time_part} {period} بتوقيت السعودية"
+        except Exception:
+            saudi_time = frappe.utils.now_datetime().strftime("%I:%M %p")
+
         # 4. Format Structured Arabic WhatsApp Message
         msg = (
             f"🔔 *{title}*\n"
@@ -1781,6 +1798,7 @@ def notify_employee_custody_event(doc, method=None) -> dict:
             f"👤 *الموظف:* {emp_name} (`{emp_id}`)\n"
             f"💰 *المبلغ:* {float(amount):,.2f} ريال سعودي\n"
             f"📄 *المستند:* `{doc.name}` ({doc_date})\n"
+            f"⏰ *التوقيت:* {saudi_time}\n"
             f"📝 *البيان:* {purpose}\n"
             f"{balance_line}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"

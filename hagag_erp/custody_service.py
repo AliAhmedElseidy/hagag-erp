@@ -1458,6 +1458,77 @@ def apply_jv_draft_correction(apply: bool = False, strategy: str = "pending_revi
     }
 
 
+def submit_acc_jv_2026_00005() -> dict:
+    """
+    Submits Journal Entry ACC-JV-2026-00005 under ZATCA Article 50:
+    - 230 SAR on 5120 (fuel expense inclusive of non-recoverable VAT for admin passenger vehicle)
+    - 230 SAR on 1120 (cash custody credited)
+    - Documents employee HR-EMP-00001 (علي احمد الصعيدي) in user_remark
+    - Submits document to docstatus = 1
+    """
+    jv_name = "ACC-JV-2026-00005"
+    if not frappe.db.exists("Journal Entry", jv_name):
+        return {"status": "error", "message": f"Journal Entry {jv_name} not found"}
+
+    jv = frappe.get_doc("Journal Entry", jv_name)
+    if jv.docstatus == 1:
+        return {
+            "status": "already_submitted",
+            "message": f"Journal Entry {jv_name} is already submitted.",
+            "docstatus": 1
+        }
+
+    comp = jv.company or "ركن سبل الافق"
+    comp_name, abbr = get_target_company(comp)
+
+    fuel_acc = f"5120 - مصروف الوقود والمحروقات - {abbr}"
+    cust_acc = f"1120 - عهد نقدية للمهندسين والمشرفين - {abbr}"
+    emp_remark = "فاتورة بنزين بقيمة 230 ريال شاملة الضريبة 15% (سيارة إدارية خاصة - غير مستردة ZATCA المادة 50) مسددة من عهدة علي احمد الصعيدي (HR-EMP-00001)"
+
+    jv.set("accounts", [])
+    jv.append("accounts", {
+        "account": fuel_acc,
+        "debit_in_account_currency": 230.0,
+        "credit_in_account_currency": 0.0,
+        "debit": 230.0,
+        "credit": 0.0,
+        "party_type": None,
+        "party": None,
+        "user_remark": emp_remark
+    })
+    jv.append("accounts", {
+        "account": cust_acc,
+        "debit_in_account_currency": 0.0,
+        "credit_in_account_currency": 230.0,
+        "debit": 0.0,
+        "credit": 230.0,
+        "party_type": None,
+        "party": None,
+        "user_remark": emp_remark
+    })
+
+    jv.user_remark = emp_remark
+    jv.save(ignore_permissions=True)
+    jv.submit()
+    frappe.db.commit()
+
+    gl_entries = frappe.get_all(
+        "GL Entry",
+        filters={"voucher_type": "Journal Entry", "voucher_no": jv_name, "is_cancelled": 0},
+        fields=["name", "account", "debit", "credit", "posting_date"]
+    )
+
+    return {
+        "status": "submitted",
+        "voucher_no": jv_name,
+        "docstatus": jv.docstatus,
+        "posting_date": str(jv.posting_date),
+        "total_amount": float(jv.total_debit),
+        "user_remark": jv.user_remark,
+        "gl_entries": gl_entries
+    }
+
+
 # -------------------------------------------------------------------------
 # PHASE 2 (STAGE 2) — AUTOMATED WHATSAPP CUSTODY NOTIFICATION ENGINE
 # -------------------------------------------------------------------------

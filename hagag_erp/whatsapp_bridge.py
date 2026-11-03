@@ -127,7 +127,7 @@ def request_pairing_code_internal(hub_doc, phone: str) -> dict:
 	res = call_baileys_api("pair-phone", method="POST", data={"phone": clean_phone}, hub_doc=hub_doc)
 
 	if res.get("status") == "ok":
-		code = res.get("code")
+		code = res.get("code") or res.get("pairing_code")
 		formatted = res.get("formatted_code") or (f"{code[:4]}-{code[4:]}" if code and len(code) == 8 else code)
 		frappe.db.set_value("Elsaidy WhatsApp Hub", None, {
 			"bot_phone_number": clean_phone,
@@ -140,6 +140,7 @@ def request_pairing_code_internal(hub_doc, phone: str) -> dict:
 			"status": "ok",
 			"code": code,
 			"formatted_code": formatted,
+			"pairing_code": code,
 			"phone": clean_phone
 		}
 

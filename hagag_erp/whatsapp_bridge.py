@@ -406,62 +406,39 @@ def parse_expense_from_text(text: str) -> dict:
 
 def resolve_destination_jid(target: str) -> str:
 	"""
-	Resolves any recipient identifier (phone number, JID, or LID) to the canonical delivery JID.
-	Prioritizes verified WhatsApp Cloud LID for 1-to-1 contacts to prevent
-	the 'Waiting for this message. This may take a while' Signal ratchet split error.
+	Resolves any recipient identifier (phone number or JID) to canonical delivery JID.
+	For 1-to-1 contacts, always delivers to {norm_phone}@s.whatsapp.net.
+	LID is strictly for contact tracking/auto-learning, NOT as the delivery stanza destination,
+	as direct LID stanzas break multi-device routing and trigger 'Waiting for this message'.
 	"""
 	clean = (target or "").strip()
 	if not clean:
 		return ""
 
-	# If already explicit LID or Group JID, return directly
-	if clean.endswith("@lid") or clean.endswith("@g.us"):
+	if clean.endswith("@g.us"):
+		return clean
+
+	# If someone passed an explicit LID, try to resolve to phone number
+	if clean.endswith("@lid"):
+		clean_digits = clean.split("@")[0].split(":")[0]
+		try:
+			rule = frappe.db.sql("""
+				SELECT phone_number FROM `tabElsaidy WhatsApp Contact Rule`
+				WHERE whatsapp_lid LIKE %s AND is_active = 1 LIMIT 1
+			""", (f"%{clean_digits}%",), as_dict=True)
+			if rule and rule[0].get("phone_number"):
+				norm_p = normalize_phone_number(rule[0]["phone_number"])
+				if norm_p:
+					return f"{norm_p}@s.whatsapp.net"
+		except Exception:
+			pass
 		return clean
 
 	norm_phone = normalize_phone_number(clean)
-	if not norm_phone:
-		return clean if "@" in clean else f"{clean}@s.whatsapp.net"
+	if norm_phone:
+		return f"{norm_phone}@s.whatsapp.net"
 
-	# 1. Check Elsaidy WhatsApp Contact Rule table for configured or auto-learned whatsapp_lid
-	try:
-		rules = frappe.db.sql("""
-			SELECT whatsapp_lid, phone_number
-			FROM `tabElsaidy WhatsApp Contact Rule`
-			WHERE is_active = 1
-			  AND (phone_number = %s OR phone_number LIKE %s)
-			  AND whatsapp_lid IS NOT NULL AND whatsapp_lid != ''
-			LIMIT 1
-		""", (norm_phone, f"%{norm_phone[-9:]}"), as_dict=True)
-		if rules and rules[0].get("whatsapp_lid"):
-			lid = rules[0]["whatsapp_lid"].strip()
-			if not lid.endswith("@lid"):
-				lid = f"{lid}@lid"
-			frappe.logger("whatsapp").info(f"[ResolveJID] Resolved phone {norm_phone} to Contact Rule LID: {lid}")
-			return lid
-	except Exception as e:
-		frappe.logger("whatsapp").warn(f"[ResolveJID] Error querying contact rules: {e}")
-
-	# 2. Check recent incoming WhatsApp logs for active sender_lid
-	try:
-		recent_lid = frappe.db.sql("""
-			SELECT sender_lid
-			FROM `tabElsaidy WhatsApp Log`
-			WHERE (sender_phone = %s OR receiver_phone = %s)
-			  AND sender_lid IS NOT NULL AND sender_lid != ''
-			ORDER BY creation DESC
-			LIMIT 1
-		""", (norm_phone, norm_phone), as_dict=True)
-		if recent_lid and recent_lid[0].get("sender_lid"):
-			lid = recent_lid[0]["sender_lid"].strip()
-			if not lid.endswith("@lid"):
-				lid = f"{lid}@lid"
-			frappe.logger("whatsapp").info(f"[ResolveJID] Resolved phone {norm_phone} to Log LID: {lid}")
-			return lid
-	except Exception as e:
-		frappe.logger("whatsapp").warn(f"[ResolveJID] Error querying logs: {e}")
-
-	# 3. Default fallback: standard phone JID
-	return f"{norm_phone}@s.whatsapp.net"
+	return clean if "@" in clean else f"{clean}@s.whatsapp.net"
 
 
 @frappe.whitelist()
@@ -633,11 +610,17 @@ def receive_baileys_event():
 		["name", "status", "linked_document_type", "linked_document_name"],
 		as_dict=True
 	)
-	if existing_log and existing_log.status in ("Processed", "Replied"):
+	if existing_log:
+		if existing_log.status in ("Processed", "Replied"):
+			return {
+				"status": "already_processed",
+				"message_id": msg_id,
+				"linked_doc": f"{existing_log.linked_document_type} - {existing_log.linked_document_name}"
+			}
 		return {
-			"status": "already_processed",
+			"status": "already_logged",
 			"message_id": msg_id,
-			"linked_doc": f"{existing_log.linked_document_type} - {existing_log.linked_document_name}"
+			"current_status": existing_log.status
 		}
 
 	# Create Log Doc
@@ -1172,8 +1155,7 @@ def send_conversation_reply(target_id: str, message: str, quoted_msg_id: str = N
 		frappe.throw(_("لا يمكن الإرسال إلى رقم البوت نفسه."))
 	
 	is_group = clean_target.endswith("@g.us")
-	is_lid = clean_target.endswith("@lid")
-	jid = clean_target if (is_group or is_lid) else resolve_destination_jid(clean_target)
+	jid = clean_target if is_group else resolve_destination_jid(clean_target)
 	
 	payload = {
 		"jid": jid,
@@ -1183,20 +1165,23 @@ def send_conversation_reply(target_id: str, message: str, quoted_msg_id: str = N
 	res = call_baileys_api("send-message", method="POST", data=payload)
 	
 	if res.get("status") == "ok":
-		log_doc = frappe.new_doc("Elsaidy WhatsApp Log")
-		log_doc.message_id = res.get("msg_id") or f"HUB-OUT-{frappe.generate_hash(length=8)}"
-		log_doc.direction = "Outgoing"
-		log_doc.sender_phone = bot_phone
-		log_doc.receiver_phone = norm_target
-		log_doc.receiver_jid = jid
-		log_doc.reply_jid = jid
-		log_doc.message_text = text
-		log_doc.status = "Replied"
-		log_doc.delivery_status = "Sent"
-		log_doc.extracted_intent = "Human Direct Reply"
-		log_doc.insert(ignore_permissions=True)
-		frappe.db.commit()
-		return {"status": "ok", "msg_id": log_doc.message_id, "log": log_doc.name}
+		out_msg_id = res.get("msg_id") or f"HUB-OUT-{frappe.generate_hash(length=8)}"
+		if not frappe.db.exists("Elsaidy WhatsApp Log", {"message_id": out_msg_id}):
+			log_doc = frappe.new_doc("Elsaidy WhatsApp Log")
+			log_doc.message_id = out_msg_id
+			log_doc.direction = "Outgoing"
+			log_doc.sender_phone = bot_phone
+			log_doc.receiver_phone = norm_target
+			log_doc.receiver_jid = jid
+			log_doc.reply_jid = jid
+			log_doc.message_text = text
+			log_doc.status = "Replied"
+			log_doc.delivery_status = "Sent"
+			log_doc.extracted_intent = "Human Direct Reply"
+			log_doc.insert(ignore_permissions=True)
+			frappe.db.commit()
+			return {"status": "ok", "msg_id": out_msg_id, "log": log_doc.name}
+		return {"status": "ok", "msg_id": out_msg_id}
 	
 	return res
 
@@ -1399,8 +1384,7 @@ def send_test_whatsapp_message(recipient: str, message: str) -> dict:
 		frappe.throw(_("غير مسموح بالإرسال إلى قنوات البث أو النشرات الإخبارية."))
 
 	is_group = clean_recipient.endswith("@g.us")
-	is_lid = clean_recipient.endswith("@lid")
-	jid = clean_recipient if (is_group or is_lid) else resolve_destination_jid(clean_recipient)
+	jid = clean_recipient if is_group else resolve_destination_jid(clean_recipient)
 
 	payload = {
 		"jid": jid,
@@ -1410,19 +1394,21 @@ def send_test_whatsapp_message(recipient: str, message: str) -> dict:
 
 	# Record in Elsaidy WhatsApp Log as Outgoing
 	if res.get("status") == "ok":
-		log_doc = frappe.new_doc("Elsaidy WhatsApp Log")
-		log_doc.message_id = res.get("msg_id") or f"TEST-{frappe.generate_hash(length=8)}"
-		log_doc.direction = "Outgoing"
-		log_doc.sender_phone = bot_phone
-		log_doc.receiver_phone = norm_recipient
-		log_doc.receiver_jid = jid
-		log_doc.reply_jid = jid
-		log_doc.message_text = message
-		log_doc.status = "Replied"
-		log_doc.delivery_status = "Sent"
-		log_doc.extracted_intent = "Manual Test Message"
-		log_doc.insert(ignore_permissions=True)
-		frappe.db.commit()
+		out_msg_id = res.get("msg_id") or f"TEST-{frappe.generate_hash(length=8)}"
+		if not frappe.db.exists("Elsaidy WhatsApp Log", {"message_id": out_msg_id}):
+			log_doc = frappe.new_doc("Elsaidy WhatsApp Log")
+			log_doc.message_id = out_msg_id
+			log_doc.direction = "Outgoing"
+			log_doc.sender_phone = bot_phone
+			log_doc.receiver_phone = norm_recipient
+			log_doc.receiver_jid = jid
+			log_doc.reply_jid = jid
+			log_doc.message_text = message
+			log_doc.status = "Replied"
+			log_doc.delivery_status = "Sent"
+			log_doc.extracted_intent = "Manual Test Message"
+			log_doc.insert(ignore_permissions=True)
+			frappe.db.commit()
 
 	return res
 

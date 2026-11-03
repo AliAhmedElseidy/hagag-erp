@@ -473,7 +473,13 @@ class TestEmployeeCustodyPayroll(unittest.TestCase):
 def run_tests():
     suite = unittest.TestLoader().loadTestsFromTestCase(TestEmployeeCustodyPayroll)
     runner = unittest.TextTestRunner(verbosity=2)
-    return runner.run(suite)
+    result = runner.run(suite)
+    return {
+        "total_tests": result.testsRun,
+        "errors": len(result.errors),
+        "failures": len(result.failures),
+        "was_successful": result.wasSuccessful()
+    }
 
 
 if __name__ == "__main__":

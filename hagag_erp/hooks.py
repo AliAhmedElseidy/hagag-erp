@@ -143,10 +143,23 @@ app_license = "mit"
 
 doc_events = {
 	"Journal Entry": {
-		"before_submit": "hagag_erp.tax_engine.validate_tax_review_before_submit"
+		"before_submit": "hagag_erp.tax_engine.validate_tax_review_before_submit",
+		"on_submit": "hagag_erp.custody_service.notify_employee_custody_event"
 	},
 	"Purchase Invoice": {
 		"before_submit": "hagag_erp.tax_engine.validate_tax_review_before_submit"
+	},
+	"Employee Advance": {
+		"on_submit": "hagag_erp.custody_service.notify_employee_custody_event"
+	},
+	"Expense Claim": {
+		"on_submit": "hagag_erp.custody_service.notify_employee_custody_event"
+	},
+	"Additional Salary": {
+		"on_submit": "hagag_erp.custody_service.notify_employee_custody_event"
+	},
+	"Payment Entry": {
+		"on_submit": "hagag_erp.custody_service.notify_employee_custody_event"
 	}
 }
 # 	"*": {

@@ -978,6 +978,7 @@ def get_employee_live_gl_balance(employee: str = None, company: str = None) -> d
     result = {
         "posted_custody_balance": 0.0,
         "posted_salary_advances": 0.0,
+        "posted_salary_advance_balance": 0.0,
         "total_posted_gl_entries": 0,
         "unposted_draft_custody_entries": 0.0,
         "unposted_draft_advances": 0.0
@@ -1008,6 +1009,7 @@ def get_employee_live_gl_balance(employee: str = None, company: str = None) -> d
             dr = flt(gl_adv[0].total_debit)
             cr = flt(gl_adv[0].total_credit)
             result["posted_salary_advances"] = round(dr - cr, 2)
+            result["posted_salary_advance_balance"] = round(dr - cr, 2)
             result["total_posted_gl_entries"] += gl_adv[0].count
 
     # 3. Separate Unposted Drafts (docstatus = 0)
@@ -1454,3 +1456,301 @@ def apply_jv_draft_correction(apply: bool = False, strategy: str = "pending_revi
         "message": f"تم تصحيح المسودة {jv_name} بنجاح وفصل الضريبة دون ترحيل القيد إلى الدفاتر.",
         "corrected_rows": proposed_rows
     }
+
+
+# -------------------------------------------------------------------------
+# PHASE 2 (STAGE 2) — AUTOMATED WHATSAPP CUSTODY NOTIFICATION ENGINE
+# -------------------------------------------------------------------------
+
+def send_custody_whatsapp_notification(
+    phone: str,
+    message: str,
+    docname: str,
+    doctype: str,
+    intent_title: str
+) -> dict:
+    """
+    Safely dispatches WhatsApp notification to employee via Baileys bridge and
+    records the outgoing transaction in Elsaidy WhatsApp Log.
+    Guaranteed non-blocking: never raises exceptions to calling callers.
+    """
+    try:
+        from hagag_erp.whatsapp_bridge import (
+            call_baileys_api,
+            get_hub_settings,
+            resolve_destination_jid,
+            normalize_phone_number
+        )
+
+        hub = get_hub_settings()
+        bot_phone = normalize_phone_number(hub.connected_phone or hub.bot_phone_number or "") if hub else ""
+        norm_phone = normalize_phone_number(phone)
+        jid = resolve_destination_jid(norm_phone)
+
+        # Safety: Block sending to bot's own handset
+        if bot_phone and norm_phone and (bot_phone == norm_phone or norm_phone.endswith(bot_phone) or bot_phone.endswith(norm_phone)):
+            frappe.logger("custody_notification").warn(f"[SendBlocked] Refusing to notify bot handset: {norm_phone}")
+            return {"status": "ignored", "reason": "Target is bot number"}
+
+        payload = {
+            "jid": jid,
+            "message": message
+        }
+        res = call_baileys_api("send-message", method="POST", data=payload, hub_doc=hub)
+
+        # Record in Elsaidy WhatsApp Log
+        if frappe.db.table_exists("Elsaidy WhatsApp Log"):
+            try:
+                log_doc = frappe.new_doc("Elsaidy WhatsApp Log")
+                log_doc.message_id = (res.get("msg_id") if isinstance(res, dict) else None) or f"NOTIF-{frappe.generate_hash(length=8)}"
+                log_doc.direction = "Outgoing"
+                log_doc.sender_phone = bot_phone
+                log_doc.receiver_phone = norm_phone
+                log_doc.receiver_jid = jid
+                log_doc.reply_jid = jid
+                log_doc.message_text = message
+                log_doc.status = "Replied"
+                log_doc.delivery_status = "Sent" if (isinstance(res, dict) and res.get("status") == "ok") else "Pending"
+                log_doc.extracted_intent = intent_title
+                log_doc.linked_document_type = doctype
+                log_doc.linked_document_name = docname
+                log_doc.insert(ignore_permissions=True)
+                frappe.db.commit()
+            except Exception as log_err:
+                frappe.logger("custody_notification").error(f"Failed to record WhatsApp notification log: {log_err}")
+
+        return res or {"status": "dispatched"}
+
+    except Exception as e:
+        frappe.logger("custody_notification").error(f"Error sending WhatsApp notification for {doctype} {docname}: {e}")
+        return {"status": "error", "error": str(e)}
+
+
+def notify_employee_custody_event(doc, method=None) -> dict:
+    """
+    Hook triggered on on_submit of:
+    - Employee Advance
+    - Expense Claim
+    - Additional Salary
+    - Journal Entry (when accounts 1120 or 1610 are involved)
+    - Payment Entry (when employee or custody accounts are involved)
+
+    Extracts employee ID and verified phone number, computes the updated
+    live custody balance from tabGL Entry, crafts a rich Arabic message, and
+    enqueues non-blocking WhatsApp dispatch.
+    NEVER blocks or fails document submission.
+    """
+    try:
+        if isinstance(doc, dict):
+            doc = frappe._dict(doc)
+
+        doctype = doc.doctype
+        comp = doc.get("company")
+        doc_date = str(doc.get("posting_date") or doc.get("payroll_date") or nowdate())
+
+        emp_id = None
+        amount = Decimal("0.00")
+        title = "إشعار معاملة عهدة مالية"
+        purpose = ""
+
+        # 1. Analyze by DocType
+        if doctype == "Employee Advance":
+            emp_id = doc.get("employee")
+            amount = to_decimal(doc.get("advance_amount") or doc.get("paid_amount") or 0.0)
+            p_desc = doc.get("purpose") or doc.get("user_remark") or ""
+            if "سلفة" in p_desc:
+                title = "إشعار صرف سلفة موظف"
+            else:
+                title = "إشعار صرف عهدة مالية للموقع"
+            purpose = p_desc or "صرف عهدة مالية معتمدة"
+
+        elif doctype == "Expense Claim":
+            emp_id = doc.get("employee")
+            amount = to_decimal(doc.get("total_sanctioned_amount") or doc.get("grand_total") or 0.0)
+            title = "إشعار تسوية فواتير ومصروفات من العهدة"
+            purpose = doc.get("remark") or "تسوية مطالبات ومصروفات عمل معتمدة"
+
+        elif doctype == "Additional Salary":
+            emp_id = doc.get("employee")
+            amount = to_decimal(doc.get("amount") or 0.0)
+            component = doc.get("salary_component") or ""
+            is_deduction = (doc.get("type") == "Deduction" or any(k in component for k in ["استقطاع", "سلفة", "خصم", "سلف"]))
+            if not is_deduction:
+                return {"status": "skipped", "reason": "Not a salary advance deduction"}
+            title = "إشعار تسجيل استقطاع سلفة من مسير الرواتب"
+            purpose = doc.get("remark") or f"استقطاع سلفة ({component}) على مسير شهر {doc_date}"
+
+        elif doctype == "Journal Entry":
+            accounts = doc.get("accounts") or []
+            # Check if 1120 or 1610 or custody/advance account is touched
+            cust_rows = [r for r in accounts if any(k in (r.get("account") or "") for k in ["1120", "1610", "عهد", "سلف"])]
+            if not cust_rows:
+                return {"status": "skipped", "reason": "No custody or advance accounts touched"}
+
+            # Resolve Employee
+            for r in cust_rows:
+                if r.get("party_type") == "Employee" and r.get("party"):
+                    emp_id = r.get("party")
+                    break
+
+            # If not in party (standard for 1120 Cash), resolve from remarks
+            if not emp_id:
+                remark_text = f"{doc.get('user_remark') or ''} {' '.join(r.get('user_remark') or '' for r in cust_rows)}"
+                id_match = re.search(r"HR-EMP-\d+", remark_text)
+                if id_match:
+                    emp_id = id_match.group(0)
+                else:
+                    emp_res = resolve_employee(identifier=remark_text, company=comp)
+                    if emp_res.get("status") == "success":
+                        emp_id = emp_res["employee"]
+
+            if not emp_id:
+                frappe.logger("custody_notification").info(f"Skipping notification for {doctype} {doc.name}: No employee mapped in custody JV")
+                return {"status": "skipped", "reason": "No employee mapped"}
+
+            # Determine direction on custody/advance accounts
+            salf_rows = [r for r in cust_rows if any(k in (r.get("account") or "") for k in ["1610", "سلف"])]
+            ohda_rows = [r for r in cust_rows if any(k in (r.get("account") or "") for k in ["1120", "عهد"])]
+
+            if salf_rows:
+                debit_salf = sum(to_decimal(r.get("debit")) for r in salf_rows)
+                credit_salf = sum(to_decimal(r.get("credit")) for r in salf_rows)
+                if debit_salf > Decimal("0.00"):
+                    title = "إشعار صرف سلفة موظف"
+                    amount = debit_salf
+                else:
+                    title = "إشعار تسوية / سداد سلفة موظف"
+                    amount = credit_salf
+            elif ohda_rows:
+                credit_ohda = sum(to_decimal(r.get("credit")) for r in ohda_rows)
+                debit_ohda = sum(to_decimal(r.get("debit")) for r in ohda_rows)
+                if credit_ohda > Decimal("0.00"):
+                    title = "إشعار خصم وتسوية فاتورة من العهدة"
+                    amount = credit_ohda
+                elif debit_ohda > Decimal("0.00"):
+                    title = "إشعار تغذية وإضافة عهدة نقدية"
+                    amount = debit_ohda
+                else:
+                    amount = to_decimal(doc.get("total_debit") or 0.0)
+                    title = "إشعار قيد تسوية عهدة"
+            else:
+                amount = to_decimal(doc.get("total_debit") or 0.0)
+                title = "إشعار قيد تسوية عهدة"
+
+            purpose = doc.get("user_remark") or "تسوية قيد محاسبي للعهدة"
+
+        elif doctype == "Payment Entry":
+            # Check if employee or custody account is involved
+            is_emp = (doc.get("party_type") == "Employee")
+            paid_to = doc.get("paid_to") or ""
+            paid_from = doc.get("paid_from") or ""
+            is_custody = any(k in (paid_to + " " + paid_from) for k in ["1120", "1610", "عهد", "سلف"])
+
+            if not (is_emp or is_custody):
+                return {"status": "skipped", "reason": "Not an employee custody payment"}
+
+            emp_id = doc.get("party") if is_emp else None
+            if not emp_id:
+                rem_text = doc.get("remarks") or ""
+                id_match = re.search(r"HR-EMP-\d+", rem_text)
+                if id_match:
+                    emp_id = id_match.group(0)
+                else:
+                    emp_res = resolve_employee(identifier=rem_text, company=comp)
+                    if emp_res.get("status") == "success":
+                        emp_id = emp_res["employee"]
+
+            if not emp_id:
+                return {"status": "skipped", "reason": "No employee mapped"}
+
+            amount = to_decimal(doc.get("paid_amount") or doc.get("received_amount") or 0.0)
+            title = "إشعار سند صرف / تغذية عهدة"
+            purpose = doc.get("remarks") or "صرف دفعة مالية للعهدة"
+
+        else:
+            return {"status": "skipped", "reason": f"DocType {doctype} not monitored"}
+
+        if not emp_id or amount <= Decimal("0.00"):
+            return {"status": "skipped", "reason": "Missing employee ID or zero amount"}
+
+        # 2. Extract Employee Details & Clean Phone
+        if not frappe.db.exists("Employee", emp_id):
+            return {"status": "skipped", "reason": f"Employee {emp_id} does not exist"}
+
+        emp = frappe.get_doc("Employee", emp_id)
+        emp_name = emp.employee_name or emp_id
+        phone = emp.cell_number or getattr(emp, "personal_phone", None) or getattr(emp, "company_phone", None)
+
+        if not phone and frappe.db.table_exists("Elsaidy WhatsApp Contact Rule"):
+            phone = frappe.db.get_value("Elsaidy WhatsApp Contact Rule", {"linked_employee": emp_id, "is_active": 1}, "phone_number")
+
+        clean_num = clean_phone(phone) if phone else ""
+        if not clean_num:
+            frappe.logger("custody_notification").info(f"Skipping WhatsApp notification: No phone registered for {emp_id} ({emp_name})")
+            return {"status": "skipped", "reason": "No phone registered", "employee": emp_id}
+
+        if any(clean_num == clean_phone(bp) for bp in KNOWN_BOT_PHONES):
+            frappe.logger("custody_notification").warn(f"Refusing to notify bot number {clean_num} for employee {emp_id}")
+            return {"status": "skipped", "reason": "Bot phone blocked", "employee": emp_id}
+
+        # 3. Calculate Updated Live Post-Submission Custody Balance
+        live_bal = get_employee_live_gl_balance(employee=emp_id, company=comp)
+        posted_custody = live_bal.get("posted_custody_balance", 0.0)
+        posted_advance = live_bal.get("posted_salary_advance_balance", 0.0)
+
+        if "سلفة" in title or doctype == "Additional Salary":
+            balance_line = f"📊 *رصيد السلف المقيد المتبقي:* `{posted_advance:,.2f}` ريال"
+        else:
+            balance_line = f"📊 *رصيد العهدة المقيد المتبقي:* `{posted_custody:,.2f}` ريال"
+
+        # 4. Format Structured Arabic WhatsApp Message
+        msg = (
+            f"🔔 *{title}*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 *الموظف:* {emp_name} (`{emp_id}`)\n"
+            f"💰 *المبلغ:* {float(amount):,.2f} ريال سعودي\n"
+            f"📄 *المستند:* `{doc.name}` ({doc_date})\n"
+            f"📝 *البيان:* {purpose}\n"
+            f"{balance_line}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🏢 *الشركة:* {comp or 'ركن سبل الأفق'}\n"
+            f"ℹ️ إشعار آلي صادر من نظام Elsaidy ERP"
+        )
+
+        # 5. Non-Blocking Dispatch (Enqueue)
+        if getattr(frappe.flags, "in_test", False) or getattr(frappe.flags, "sync_whatsapp_notification", False):
+            # Synchronous in test mode for instant assertions
+            send_custody_whatsapp_notification(
+                phone=clean_num,
+                message=msg,
+                docname=doc.name,
+                doctype=doctype,
+                intent_title=title
+            )
+        else:
+            frappe.enqueue(
+                "hagag_erp.custody_service.send_custody_whatsapp_notification",
+                queue="short",
+                phone=clean_num,
+                message=msg,
+                docname=doc.name,
+                doctype=doctype,
+                intent_title=title
+            )
+
+        return {
+            "status": "success",
+            "employee": emp_id,
+            "employee_name": emp_name,
+            "recipient_phone": clean_num,
+            "notification_title": title,
+            "amount": float(amount),
+            "updated_custody_balance": posted_custody,
+            "message_preview": msg
+        }
+
+    except Exception as err:
+        # Non-blocking guarantee: Never fail caller transaction
+        frappe.logger("custody_notification").error(f"Failed in notify_employee_custody_event: {err}")
+        return {"status": "error", "error": str(err)}
+

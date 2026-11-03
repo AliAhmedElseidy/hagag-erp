@@ -29,6 +29,8 @@ from hagag_erp.custody_service import (
     get_employee_live_gl_balance,
     normalize_arabic_text,
     clean_phone,
+    notify_employee_custody_event,
+    send_custody_whatsapp_notification,
     INTENT_A_EXPENSE_CASH_BANK,
     INTENT_B_WORK_EXPENSE_CUSTODY,
     INTENT_C_ISSUE_REPLENISH_CUSTODY,
@@ -331,10 +333,14 @@ class TestEmployeeCustodyPayroll(unittest.TestCase):
         bal = get_employee_live_gl_balance(employee="HR-EMP-00001", company=self.company)
         self.assertIn("posted_custody_balance", bal)
         self.assertIn("unposted_draft_custody_entries", bal)
-        # Live DB has 0 posted GL entries
-        self.assertEqual(bal["posted_custody_balance"], 0.0)
-        # But has draft JVs (ACC-JV-2026-00005, ACC-JV-2026-00001)
-        self.assertGreaterEqual(bal["unposted_draft_custody_entries"], 230.0)
+        # Verify posted balance matches actual GL Entry sum in database
+        gl_check = frappe.db.sql("""
+            SELECT SUM(debit) - SUM(credit) as bal
+            FROM `tabGL Entry`
+            WHERE account = %s AND company = %s AND is_cancelled = 0
+        """, (f"1120 - عهد نقدية للمهندسين والمشرفين - {self.abbr}", self.company), as_dict=True)
+        expected_posted = round(float(gl_check[0].bal or 0.0), 2)
+        self.assertEqual(bal["posted_custody_balance"], expected_posted)
 
     # -------------------------------------------------------------
     # 7. CONSISTENCY & BALANCED ARITHMETIC (PHASE 6 & 8)
@@ -371,6 +377,97 @@ class TestEmployeeCustodyPayroll(unittest.TestCase):
         sim = simulate_custody_workflow("شراء أدوات غير معروفة ب 150 ريال نقداً", company=self.company)
         self.assertEqual(sim["status"], "success")
         self.assertTrue(len(sim["selected_accounts"]) >= 2)
+
+    # -------------------------------------------------------------
+    # 8. AUTOMATED WHATSAPP CUSTODY NOTIFICATION (PHASE 2)
+    # -------------------------------------------------------------
+
+    def test_notify_employee_custody_event_journal_entry(self):
+        """Tests WhatsApp notification formatting and dispatch for custody Journal Entry."""
+        frappe.flags.sync_whatsapp_notification = True
+        fake_jv = frappe._dict({
+            "doctype": "Journal Entry",
+            "name": "ACC-JV-2026-TEST01",
+            "company": self.company,
+            "posting_date": nowdate(),
+            "user_remark": "فاتورة بنزين مسددة من عهدة علي احمد الصعيدي (HR-EMP-00001)",
+            "accounts": [
+                {"account": f"5120 - مصروف الوقود والمحروقات - {self.abbr}", "debit": 230.0, "credit": 0.0},
+                {"account": f"1120 - عهد نقدية للمهندسين والمشرفين - {self.abbr}", "debit": 0.0, "credit": 230.0}
+            ]
+        })
+        res = notify_employee_custody_event(fake_jv)
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["employee"], "HR-EMP-00001")
+        self.assertEqual(res["recipient_phone"], "966569589664")
+        self.assertEqual(res["amount"], 230.0)
+        self.assertIn("إشعار خصم وتسوية فاتورة من العهدة", res["notification_title"])
+        self.assertIn("رصيد العهدة المقيد المتبقي", res["message_preview"])
+
+    def test_notify_employee_custody_event_employee_advance(self):
+        """Tests WhatsApp notification for Employee Advance."""
+        frappe.flags.sync_whatsapp_notification = True
+        fake_adv = frappe._dict({
+            "doctype": "Employee Advance",
+            "name": "HR-ADV-2026-TEST01",
+            "company": self.company,
+            "posting_date": nowdate(),
+            "employee": "HR-EMP-00001",
+            "advance_amount": 500.0,
+            "purpose": "عهدة مشروع الرياض"
+        })
+        res = notify_employee_custody_event(fake_adv)
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["employee"], "HR-EMP-00001")
+        self.assertEqual(res["recipient_phone"], "966569589664")
+        self.assertEqual(res["amount"], 500.0)
+        self.assertIn("إشعار صرف عهدة مالية للموقع", res["notification_title"])
+
+    def test_notify_employee_custody_event_additional_salary_deduction(self):
+        """Tests WhatsApp notification for Additional Salary advance deduction."""
+        frappe.flags.sync_whatsapp_notification = True
+        fake_sal = frappe._dict({
+            "doctype": "Additional Salary",
+            "name": "HR-AS-2026-TEST01",
+            "company": self.company,
+            "payroll_date": nowdate(),
+            "employee": "HR-EMP-00001",
+            "amount": 300.0,
+            "salary_component": "استقطاع سلفة",
+            "type": "Deduction",
+            "remark": "خصم قسط السلفة لشهر نوفمبر"
+        })
+        res = notify_employee_custody_event(fake_sal)
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["employee"], "HR-EMP-00001")
+        self.assertEqual(res["recipient_phone"], "966569589664")
+        self.assertEqual(res["amount"], 300.0)
+        self.assertIn("استقطاع سلفة", res["notification_title"])
+        self.assertIn("رصيد السلف المقيد المتبقي", res["message_preview"])
+
+    def test_notify_employee_custody_event_no_phone(self):
+        """Tests silent skip when employee has no registered phone (zero crash)."""
+        fake_doc = frappe._dict({
+            "doctype": "Employee Advance",
+            "name": "HR-ADV-2026-NOPHON",
+            "company": self.company,
+            "employee": "NON-EXISTENT-EMP",
+            "advance_amount": 100.0
+        })
+        res = notify_employee_custody_event(fake_doc)
+        self.assertEqual(res["status"], "skipped")
+
+    def test_notify_employee_custody_event_bot_phone_blocked(self):
+        """Tests that dispatch to bot handset is strictly blocked."""
+        res = send_custody_whatsapp_notification(
+            phone="201028632620",
+            message="Test bot protection",
+            docname="TEST",
+            doctype="Test",
+            intent_title="Test"
+        )
+        self.assertEqual(res["status"], "ignored")
+        self.assertIn("bot", res["reason"].lower())
 
 
 def run_tests():

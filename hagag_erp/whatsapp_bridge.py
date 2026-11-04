@@ -578,6 +578,13 @@ def parse_expense_from_text(text: str) -> dict:
 	if not has_keyword:
 		return None
 
+	# Guard: Disallow custody funding or personal advance from being erroneously parsed as an expense
+	disallow_expense_terms = ["صرف عهدة", "تحويل عهدة", "تغذية عهدة", "إيداع عهدة", "ايداع عهدة", "سلفة شخصية", "سلفة راتب", "استقطاع راتب"]
+	if any(dt in normalized_text for dt in disallow_expense_terms):
+		return None
+	if any(v in normalized_text for v in ["تحويل", "تغذية", "إيداع", "ايداع"]) and "عهدة" in normalized_text:
+		return None
+
 	# Extract numeric amount (supports decimals e.g. 1200 or 1200.50)
 	amount_match = re.search(r"(?:مبلغ|قيمة|مقدار|بقيمة|مبلغه)?\s*([0-9]+(?:[\.,][0-9]{1,2})?)\s*(?:ريال|ر\.س|SAR)?", normalized_text)
 	if not amount_match:

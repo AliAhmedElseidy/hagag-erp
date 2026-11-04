@@ -137,18 +137,28 @@ class RavenAgentManager:
 			if "prepare_financial_operation_preview" not in existing_tool_names:
 				t1 = create_function_tool(
 					"prepare_financial_operation_preview",
-					"يعد معاينة مالية ومحاسبية دقيقة لأي عملية (مصروف عهدة، صرف عهدة، سلفة) ويولد معرّف عملية OP-PREV. لا ينشئ أي قيد في النظام.",
+					"يعد معاينة مالية ومحاسبية دقيقة لأي عملية (صرف/تغذية عهدة، مصروف عهدة، سلفة شخصية) ويولد معرّف عملية OP-PREV. لا ينشئ أي قيد في النظام.",
 					"hagag_erp.ai_tools.prepare_financial_operation_preview",
 					{
 						"type": "object",
 						"properties": {
-							"operation_type": {"type": "string", "enum": ["custody_expense", "custody_disbursement", "salary_advance"], "description": "نوع المعاملة"},
+							"operation_type": {
+								"type": "string",
+								"enum": ["custody_disbursement", "custody_expense", "salary_advance"],
+								"description": "نوع العملية: custody_disbursement (صرف أو تغذية أو تحويل عهدة للموظف)، custody_expense (تسوية فاتورة أو مصروف من العهدة)، salary_advance (صرف سلفة شخصية)"
+							},
 							"amount": {"type": "number", "description": "المبلغ الإجمالي بالريال"},
-							"employee": {"type": "string", "description": "الموظف أو رقمه HR-EMP-00001"},
-							"tax_status": {"type": "string", "enum": ["inclusive", "exclusive", "no_tax", "unspecified"], "description": "هل المبلغ شامل الضريبة 15% أم غير شامل"},
+							"employee": {"type": "string", "description": "اسم الموظف أو رقمه الوظيفي مثل HR-EMP-00001 أو علي الصعيدي"},
+							"payment_source": {
+								"type": "string",
+								"enum": ["bank", "cash"],
+								"description": "مصدر الدفع أو التحويل: bank (البنك الأهلي SNB) أو cash (الصندوق النقد)"
+							},
+							"bank_name": {"type": "string", "description": "اسم البنك المحول منه مثل البنك الأهلي السعودي"},
+							"tax_status": {"type": "string", "enum": ["inclusive", "exclusive", "no_tax", "unspecified"], "description": "هل المبلغ شامل الضريبة 15% أم غير شامل (خاص بمصاريف العهدة فقط)"},
 							"has_tax_invoice": {"type": "integer", "enum": [0, 1], "description": "1 إذا كانت تتوفر فاتورة ضريبية نظامية، 0 إن لم تتوفر"},
-							"expense_category": {"type": "string", "description": "نوع المصروف مثل fuel أو maintenance"},
-							"description": {"type": "string", "description": "بيان المصروف"}
+							"expense_category": {"type": "string", "description": "نوع المصروف مثل fuel أو maintenance أو project_materials"},
+							"description": {"type": "string", "description": "بيان المعاملة المحاسبية"}
 						},
 						"required": ["operation_type", "amount"]
 					}
@@ -657,7 +667,11 @@ async def handle_ai_request_async(
 						+ "3. PREVIEW & CONFIRMATION: When user asks to record an expense or disbursement, call prepare_financial_operation_preview to show the dry-run simulation and get an OP-PREV operation ID. When the user confirms with 'أكد' or 'اعتمد', call execute_confirmed_financial_operation!\n"
 						+ "4. BALANCE INQUIRIES: When user asks for balance, report, or status, you MUST call get_employee_custody_report(employee=...) or get_gl_balance. NEVER guess or invent 0.00!\n"
 						+ "5. SUBMISSIONS: To submit an existing draft document, call submit_financial_document(doctype, document_name).\n"
-						+ "6. KEEP RESPONSES BRIEF, PROFESSIONAL, AND IN ARABIC."
+						+ "6. STRICT UNIFIED ACCOUNTING CLASSIFICATION:\n"
+						+ "   - OPERATION A (صرف وتغذية عهدة): If user mentions transfer, feeding, or disbursing custody (e.g. 'تم تحويل عهدة', 'صرف عهدة', 'تغذية عهدة', 'أودعنا عهدة', 'تحويل من البنك الأهلي عهدة'), call prepare_financial_operation_preview with operation_type='custody_disbursement' and payment_source='bank' (if bank/AlAhli mentioned) or 'cash'. NEVER classify custody feeding as fuel expense or purchase invoice!\n"
+						+ "   - OPERATION B (تسوية مصروف من عهدة): If user mentions recording an expense, fuel, diesel, maintenance, or materials from custody (e.g. 'فاتورة بنزين', 'صرفت من العهدة', 'تسوية مصروف'), call prepare_financial_operation_preview with operation_type='custody_expense'.\n"
+						+ "   - OPERATION C (صرف سلفة شخصية): If user mentions personal advance or salary deduction (e.g. 'سلفة شخصية', 'سلفة تخصم من الراتب'), call prepare_financial_operation_preview with operation_type='salary_advance'. This must NEVER touch custody account (1120).\n"
+						+ "7. KEEP RESPONSES BRIEF, PROFESSIONAL, AND IN ARABIC."
 					)
 
 					# Build messages array with proper conversation history (plain string content for Gemini OpenAI API)

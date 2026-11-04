@@ -1727,11 +1727,96 @@ def record_employee_custody_expense(
     )
 
 
+def validate_financial_operation_payload(
+    operation_type: str,
+    amount: float,
+    employee_id: str,
+    payment_source: str = "bank",
+    expense_category: str = "fuel",
+    tax_status: str = "unspecified",
+    company: str = None,
+    user_id: str = None,
+    operation_id: str = None
+) -> dict:
+    """
+    Central 12-point validation layer for financial transactions across Raven AI & WhatsApp.
+    Enforces strict rules before preview generation or execution.
+    """
+    from hagag_erp.tax_engine import get_target_company
+    from hagag_erp.custody_service import (
+        get_verified_account_for_category,
+        get_verified_payment_account,
+        verify_user_authorization
+    )
+
+    valid_types = ("custody_disbursement", "custody_expense", "salary_advance")
+    if operation_type not in valid_types:
+        return {
+            "valid": False,
+            "error": f"نوع العملية غير معروف [{operation_type}]. الأنواع المعتمدة: صرف عهدة (custody_disbursement)، تسوية مصروف (custody_expense)، سلفة شخصية (salary_advance)."
+        }
+
+    if not amount or flt(amount) <= 0:
+        return {"valid": False, "error": "مبلغ المعاملة غير صالح أو يساوي صفراً."}
+
+    comp_name, abbr = get_target_company(company)
+
+    # Verify Employee
+    if not employee_id or not frappe.db.exists("Employee", employee_id):
+        return {"valid": False, "error": f"الموظف [{employee_id}] غير مسجل في النظام."}
+
+    emp_status = frappe.db.get_value("Employee", employee_id, "status")
+    if emp_status == "Left":
+        return {"valid": False, "error": f"الموظف [{employee_id}] غير نشط في سجلات الموارد البشرية."}
+
+    # Verify User Permission
+    if not frappe.has_permission("Journal Entry", "create") and not verify_user_authorization(user_id):
+        return {"valid": False, "error": "🔒 تنبيه أمني: لا تملك صلاحية محاسبية لإنشاء القيود المالية."}
+
+    # Verify Accounts
+    if operation_type == "custody_disbursement":
+        custody_acc, _ = get_verified_payment_account("custody", comp_name)
+        source_acc, source_type = get_verified_payment_account(payment_source or "bank", comp_name)
+        if not frappe.db.exists("Account", custody_acc):
+            return {"valid": False, "error": f"حساب العهدة [{custody_acc}] غير موجود في شجرة الحسابات."}
+        if not frappe.db.exists("Account", source_acc):
+            return {"valid": False, "error": f"حساب الدفع/التحويل [{source_acc}] غير موجود في شجرة الحسابات."}
+
+    elif operation_type == "custody_expense":
+        exp_acc = get_verified_account_for_category(expense_category or "fuel", comp_name)
+        custody_acc, _ = get_verified_payment_account("custody", comp_name)
+        if not frappe.db.exists("Account", exp_acc):
+            return {"valid": False, "error": f"حساب المصروف [{exp_acc}] غير موجود في شجرة الحسابات."}
+        if not frappe.db.exists("Account", custody_acc):
+            return {"valid": False, "error": f"حساب العهدة [{custody_acc}] غير موجود في شجرة الحسابات."}
+        if tax_status in ("unspecified", None, ""):
+            return {"valid": False, "needs_tax_clarification": True, "error": "المعالجة الضريبية غير محددة (شامل/غير شامل الضريبة)."}
+
+    elif operation_type == "salary_advance":
+        adv_acc, _ = get_verified_payment_account("advance", comp_name)
+        source_acc, _ = get_verified_payment_account(payment_source or "bank", comp_name)
+        if not frappe.db.exists("Account", adv_acc):
+            return {"valid": False, "error": f"حساب السلف [{adv_acc}] غير موجود في شجرة الحسابات."}
+        if not frappe.db.exists("Account", source_acc):
+            return {"valid": False, "error": f"حساب السداد [{source_acc}] غير موجود في شجرة الحسابات."}
+
+    # Check Idempotency if operation_id provided
+    if operation_id:
+        existing = frappe.db.get_value("Journal Entry", {"cheque_no": operation_id}, ["name", "docstatus"], as_dict=True) or \
+                   frappe.db.get_value("Journal Entry", {"user_remark": ["like", f"%[{operation_id}]%"]}, ["name", "docstatus"], as_dict=True)
+        if existing:
+            return {"valid": False, "already_executed": True, "document_name": existing.name, "docstatus": existing.docstatus}
+
+    return {"valid": True, "company": comp_name, "abbr": abbr}
+
+
 @frappe.whitelist()
 def prepare_financial_operation_preview(
     operation_type: str = "custody_expense",
     amount: float = None,
     employee: str = None,
+    payment_source: str = "bank",
+    bank_name: str = None,
     tax_status: str = "unspecified",
     has_tax_invoice: int = None,
     expense_category: str = "fuel",
@@ -1747,8 +1832,23 @@ def prepare_financial_operation_preview(
     Generates a unique operation_id and caches the pending transaction for explicit confirmation.
     NEVER creates any document in the database during preview!
     """
-    from hagag_erp.custody_service import resolve_employee, simulate_custody_workflow, verify_user_authorization
-    from hagag_erp.tax_engine import get_target_company
+    from hagag_erp.custody_service import (
+        resolve_employee,
+        classify_accounting_intent,
+        get_verified_account_for_category,
+        get_verified_payment_account,
+        get_employee_live_gl_balance,
+        verify_user_authorization,
+        INTENT_C_ISSUE_REPLENISH_CUSTODY,
+        INTENT_B_WORK_EXPENSE_CUSTODY,
+        INTENT_D_PERSONAL_SALARY_ADVANCE
+    )
+    from hagag_erp.tax_engine import (
+        get_target_company,
+        get_company_tax_accounts,
+        evaluate_vat_eligibility_and_split,
+        to_decimal
+    )
 
     if not amount or flt(amount) <= 0:
         return format_tool_response(
@@ -1768,7 +1868,7 @@ def prepare_financial_operation_preview(
         )
 
     comp_name, abbr = get_target_company(company)
-    emp_res = resolve_employee(identifier=employee, user_id=frappe.session.user, company=comp_name)
+    emp_res = resolve_employee(identifier=employee or description, user_id=frappe.session.user, company=comp_name)
     if emp_res.get("status") != "success":
         return format_tool_response(
             success=False,
@@ -1780,34 +1880,236 @@ def prepare_financial_operation_preview(
     emp_id = emp_res["employee"]
     emp_name = emp_res["employee_name"]
 
-    # Tax Verification (Phase 3)
-    if operation_type == "custody_expense":
-        raw_tax = (tax_status or kwargs.get("is_inclusive") or "unspecified")
-        if raw_tax in ("unspecified", None, ""):
-            return format_tool_response(
-                success=False,
-                amount=amount,
-                employee_id=emp_id,
-                requires_clarification=True,
-                missing_fields=["tax_status", "has_tax_invoice"],
-                error="المعالجة الضريبية غير محددة",
-                message=(
-                    f"⚠️ *يلزم تحديد المعالجة الضريبية قبل إنشاء المعاينة:*\n"
-                    f"المبلغ المطلوب: `{flt(amount):,.2f}` ريال لمصروف ({expense_category}).\n"
-                    f"1. هل المبلغ شامل ضريبة القيمة المضافة 15% أم غير شامل للضريبة؟\n"
-                    f"2. هل تتوفر فاتورة ضريبية نظامية مسجلة باسم الشركة للمعدات/السيارات التشغيلية؟\n\n"
-                    f"يرجى توضيح ذلك (مثال: 'شامل الضريبة ومعه فاتورة نظامية')."
-                )
-            )
+    # ─────────────────────────────────────────────────────────────
+    # Programmatic Sanity Check & Intent Classification Shield
+    # Prevents LLM from erroneously classifying custody replenishment as expense!
+    # ─────────────────────────────────────────────────────────────
+    raw_check_text = f"{description or ''} {expense_category or ''} {kwargs.get('raw_text', '')}"
+    classified = classify_accounting_intent(raw_check_text)
+    detected_intent = classified.get("intent")
 
-    # Execute simulation (Phase 4 Step 3)
-    sim_res = simulate_custody_workflow(
-        text=description or f"مصروف {expense_category} بمبلغ {amount} ريال للموظف {emp_name}",
-        sender_phone=None,
+    if detected_intent == INTENT_C_ISSUE_REPLENISH_CUSTODY or any(k in raw_check_text for k in ["تحويل عهدة", "تغذية عهدة", "صرف عهدة", "ايداع عهدة", "إيداع عهدة", "تم تحويل", "تحويل مبلغ", "زود عهدة"]):
+        operation_type = "custody_disbursement"
+        if any(k in raw_check_text for k in ["بنك", "أهلي", "اهلي", "snb", "تحويل"]):
+            payment_source = "bank"
+
+    elif detected_intent == INTENT_D_PERSONAL_SALARY_ADVANCE or any(k in raw_check_text for k in ["سلفة شخصية", "سلفة راتب", "استقطاع راتب"]):
+        operation_type = "salary_advance"
+        if any(k in raw_check_text for k in ["بنك", "أهلي", "اهلي", "snb"]):
+            payment_source = "bank"
+
+    elif detected_intent == INTENT_B_WORK_EXPENSE_CUSTODY or any(k in raw_check_text for k in ["فاتورة", "بنزين", "ديزل", "صيانة", "من عهدة", "من العهدة", "صرفت"]):
+        operation_type = "custody_expense"
+
+    # Tax Verification for Expenses
+    raw_tax = (tax_status or kwargs.get("is_inclusive") or "unspecified")
+    if operation_type == "custody_expense" and raw_tax in ("unspecified", None, ""):
+        return format_tool_response(
+            success=False,
+            amount=amount,
+            employee_id=emp_id,
+            requires_clarification=True,
+            missing_fields=["tax_status", "has_tax_invoice"],
+            error="المعالجة الضريبية غير محددة",
+            message=(
+                f"⚠️ *يلزم تحديد المعالجة الضريبية قبل إنشاء المعاينة:*\n"
+                f"المبلغ المطلوب: `{flt(amount):,.2f}` ريال لمصروف ({expense_category}).\n"
+                f"1. هل المبلغ شامل ضريبة القيمة المضافة 15% أم غير شامل للضريبة؟\n"
+                f"2. هل تتوفر فاتورة ضريبية نظامية مسجلة باسم الشركة للمعدات/السيارات التشغيلية؟\n\n"
+                f"يرجى توضيح ذلك (مثال: 'شامل الضريبة ومعه فاتورة نظامية')."
+            )
+        )
+
+    # Validate operation payload centrally
+    val_res = validate_financial_operation_payload(
+        operation_type=operation_type,
+        amount=flt(amount),
+        employee_id=emp_id,
+        payment_source=payment_source,
+        expense_category=expense_category,
+        tax_status=tax_status,
+        company=comp_name,
         user_id=frappe.session.user
     )
+    if not val_res.get("valid"):
+        return format_tool_response(
+            success=False,
+            amount=amount,
+            employee_id=emp_id,
+            error=val_res.get("error", "فشل التحقق الأمني من المعاملة.")
+        )
 
     op_id = generate_operation_id(prefix="OP-PREV")
+
+    # Fetch live posted GL balances
+    live_bal = get_employee_live_gl_balance(employee=emp_id, company=comp_name)
+    posted_custody = live_bal.get("posted_custody_balance", 0.0)
+    posted_advance = live_bal.get("posted_salary_advance_balance", 0.0)
+
+    simulated_lines = []
+    preview_msg = ""
+    clean_desc = ""
+
+    # 1. Operation A: Custody Disbursement / Replenishment
+    if operation_type == "custody_disbursement":
+        custody_acc, _ = get_verified_payment_account("custody", comp_name)
+        source_acc, source_type = get_verified_payment_account(payment_source or "bank", comp_name)
+        expected_new_bal = round(posted_custody + float(amount), 2)
+        clean_desc = description or f"تغذية عهدة نقدية للموظف {emp_name} ({emp_id}) بمبلغ {flt(amount):,.2f} ريال من {source_type}"
+
+        simulated_lines = [
+            {
+                "account": custody_acc,
+                "party_type": "Employee",
+                "party": emp_id,
+                "debit": float(amount),
+                "credit": 0.0,
+                "remark": f"تغذية عهدة نقدية للموظف {emp_name}"
+            },
+            {
+                "account": source_acc,
+                "party_type": None,
+                "party": None,
+                "debit": 0.0,
+                "credit": float(amount),
+                "remark": f"صرف تحويل عهدة من حساب {source_type}"
+            }
+        ]
+
+        preview_msg = (
+            f"📋 *معاينة المعاملة المحاسبية — تغذية عهدة نقدية (Dry Run)*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔖 *معرّف العملية:* `{op_id}`\n"
+            f"👤 *الموظف المسؤول:* {emp_name} (`{emp_id}`)\n"
+            f"💰 *المبلغ المحول:* {float(amount):,.2f} ريال سعودي\n"
+            f"🏦 *حساب المصدر (دائن):* `{source_acc}`\n"
+            f"📥 *حساب العهدة (مدين):* `{custody_acc}`\n"
+            f"📊 *الرصيد الفعلي الحالي:* `{posted_custody:,.2f}` ريال\n"
+            f"📈 *الأثر المحاسبي:* زيادة رصيد العهدة بمقدار `+{float(amount):,.2f}` ريال\n"
+            f"🎯 *الرصيد المتوقع بعد الإيداع:* `{expected_new_bal:,.2f}` ريال\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚠️ *ملاحظة:* هذه معاينة فقط ولم يتم ترحيل أي قيد في الدفاتر.\n"
+            f"👉 لتنفيذ القيد واعتماده، يرجى الرد بـ: `أكد {op_id}` أو `اعتمد`."
+        )
+
+    # 2. Operation B: Custody Expense Settlement
+    elif operation_type == "custody_expense":
+        exp_account = get_verified_account_for_category(expense_category, comp_name)
+        custody_account, _ = get_verified_payment_account("custody", comp_name)
+        tax_accounts = get_company_tax_accounts(comp_name)
+
+        has_inv = 1 if (has_tax_invoice or kwargs.get("has_valid_invoice")) else 0
+        tax_eval = evaluate_vat_eligibility_and_split(
+            amount=to_decimal(amount),
+            account_code=exp_account,
+            is_taxable=True if tax_status != "no_tax" else False,
+            amount_basis="inclusive" if tax_status == "inclusive" else "exclusive",
+            usage_type="commercial" if vehicle_type == "commercial_equipment" else "passenger_restricted",
+            has_valid_tax_invoice=bool(has_inv),
+            company=comp_name
+        )
+
+        net_exp = float(tax_eval["net_expense"])
+        tax_eligible = float(tax_eval["tax_eligible"])
+        tax_pending = float(tax_eval["tax_pending"])
+        gross_total = float(tax_eval["gross_amount"])
+        expected_new_bal = round(posted_custody - gross_total, 2)
+        clean_desc = description or f"تسوية مصروف {expense_category} من عهدة {emp_name} ({emp_id})"
+
+        simulated_lines.append({
+            "account": exp_account,
+            "party_type": None,
+            "party": None,
+            "debit": net_exp,
+            "credit": 0.0,
+            "remark": f"مصروف {expense_category}"
+        })
+        if tax_eligible > 0.0:
+            simulated_lines.append({
+                "account": tax_accounts["recoverable_vat"],
+                "party_type": None,
+                "party": None,
+                "debit": tax_eligible,
+                "credit": 0.0,
+                "remark": "ضريبة مدخلات مستردة 15% - ZATCA"
+            })
+        elif tax_pending > 0.0:
+            simulated_lines.append({
+                "account": tax_accounts["pending_vat"],
+                "party_type": None,
+                "party": None,
+                "debit": tax_pending,
+                "credit": 0.0,
+                "remark": "ضريبة مدخلات معلقة قيد التدقيق"
+            })
+        simulated_lines.append({
+            "account": custody_account,
+            "party_type": "Employee",
+            "party": emp_id,
+            "debit": 0.0,
+            "credit": gross_total,
+            "remark": f"تسوية عهدة الموظف: {emp_name}"
+        })
+
+        preview_msg = (
+            f"📋 *معاينة المعاملة المحاسبية — تسوية مصروف عهدة (Dry Run)*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔖 *معرّف العملية:* `{op_id}`\n"
+            f"👤 *الموظف المسؤول:* {emp_name} (`{emp_id}`)\n"
+            f"💰 *إجمالي الفاتورة:* {gross_total:,.2f} ريال سعودي\n"
+            f"📝 *بيان المصروف:* {clean_desc}\n"
+            f"📥 *حساب المصروف (مدين):* `{exp_account}` ({net_exp:,.2f} ريال)\n"
+            f"🏛️ *ضريبة القيمة المضافة:* {tax_eligible + tax_pending:,.2f} ريال\n"
+            f"📤 *حساب العهدة (دائن):* `{custody_account}` ({gross_total:,.2f} ريال)\n"
+            f"📊 *الرصيد الفعلي الحالي:* `{posted_custody:,.2f}` ريال\n"
+            f"📉 *الأثر المحاسبي:* خصم من رصيد العهدة بمقدار `-{gross_total:,.2f}` ريال\n"
+            f"🎯 *الرصيد المتوقع بعد الخصم:* `{expected_new_bal:,.2f}` ريال\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚠️ *ملاحظة:* هذه معاينة فقط ولم يتم ترحيل أي قيد في الدفاتر.\n"
+            f"👉 لتنفيذ القيد واعتماده، يرجى الرد بـ: `أكد {op_id}` أو `اعتمد`."
+        )
+
+    # 3. Operation C: Personal Salary Advance
+    elif operation_type == "salary_advance":
+        adv_acc, _ = get_verified_payment_account("advance", comp_name)
+        source_acc, source_type = get_verified_payment_account(payment_source or "bank", comp_name)
+        expected_new_adv = round(posted_advance + float(amount), 2)
+        clean_desc = description or f"صرف سلفة شخصية للموظف {emp_name} ({emp_id}) بمبلغ {flt(amount):,.2f} ريال من {source_type}"
+
+        simulated_lines = [
+            {
+                "account": adv_acc,
+                "party_type": "Employee",
+                "party": emp_id,
+                "debit": float(amount),
+                "credit": 0.0,
+                "remark": f"صرف سلفة شخصية للموظف {emp_name}"
+            },
+            {
+                "account": source_acc,
+                "party_type": None,
+                "party": None,
+                "debit": 0.0,
+                "credit": float(amount),
+                "remark": f"صرف سلفة من حساب {source_type}"
+            }
+        ]
+
+        preview_msg = (
+            f"📋 *معاينة المعاملة المحاسبية — صرف سلفة شخصية (Dry Run)*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔖 *معرّف العملية:* `{op_id}`\n"
+            f"👤 *الموظف المستفيد:* {emp_name} (`{emp_id}`)\n"
+            f"💰 *مبلغ السلفة:* {float(amount):,.2f} ريال سعودي\n"
+            f"🏦 *حساب المصدر (دائن):* `{source_acc}`\n"
+            f"📥 *حساب السلف (مدين):* `{adv_acc}`\n"
+            f"ℹ️ *الفصل المحاسبي:* تسجل في حساب سلف الموظفين (1610) ولا تؤثر على عهد المشاريع التشغيلية (1120).\n"
+            f"📊 *رصيد السلف الحالي:* `{posted_advance:,.2f}` ريال\n"
+            f"🎯 *رصيد السلف المتوقع بعد الصرف:* `{expected_new_adv:,.2f}` ريال\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚠️ *ملاحظة:* هذه معاينة فقط ولم يتم ترحيل أي قيد في الدفاتر.\n"
+            f"👉 لتنفيذ القيد واعتماده، يرجى الرد بـ: `أكد {op_id}` أو `اعتمد`."
+        )
 
     # Pending operation payload
     pending_payload = {
@@ -1817,15 +2119,16 @@ def prepare_financial_operation_preview(
         "employee_id": emp_id,
         "employee_name": emp_name,
         "company": comp_name,
+        "payment_source": payment_source,
         "expense_category": expense_category,
         "vehicle_type": vehicle_type,
         "tax_status": tax_status,
         "has_tax_invoice": 1 if has_tax_invoice else 0,
-        "description": description or f"تسوية مصروف {expense_category} من عهدة {emp_name} ({emp_id})",
+        "description": clean_desc,
         "created_at": time.time(),
         "created_by": frappe.session.user,
         "channel_id": channel_id,
-        "simulated_lines": sim_res.get("proposed_lines") or []
+        "simulated_lines": simulated_lines
     }
 
     # Cache pending operation with 15-minute TTL
@@ -1833,19 +2136,6 @@ def prepare_financial_operation_preview(
     if channel_id:
         frappe.cache().set_value(f"latest_channel_pending_op:{channel_id}", op_id, expires_in_sec=900)
     frappe.cache().set_value(f"latest_user_pending_op:{frappe.session.user}", op_id, expires_in_sec=900)
-
-    preview_msg = (
-        f"📋 *معاينة المعاملة المالية المحاسبية (Dry Run)*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔖 *معرّف العملية:* `{op_id}`\n"
-        f"👤 *الموظف المسؤول:* {emp_name} (`{emp_id}`)\n"
-        f"💰 *إجمالي المبلغ:* {float(amount):,.2f} ريال سعودي\n"
-        f"📝 *البيان:* {pending_payload['description']}\n"
-        f"📊 *الأثر المتوقع:* رصيد العهدة سينخفض بمقدار {float(amount):,.2f} ريال\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚠️ *ملاحظة:* هذه معاينة فقط ولم يتم إنشاء أي قيد أو حجز في الدفاتر.\n"
-        f"👉 لتنفيذ القيد واعتماده، يرجى الرد بـ: `أكد {op_id}` أو `اعتمد`."
-    )
 
     return format_tool_response(
         success=True,
@@ -1857,8 +2147,8 @@ def prepare_financial_operation_preview(
         extra={
             "status": "preview_ready",
             "operation_id": op_id,
-            "preview_summary": sim_res.get("summary_text") or preview_msg,
-            "simulated_lines": sim_res.get("proposed_lines")
+            "preview_summary": preview_msg,
+            "simulated_lines": simulated_lines
         }
     )
 
@@ -1886,6 +2176,7 @@ def execute_confirmed_financial_operation(
     from hagag_erp.custody_service import (
         get_verified_account_for_category,
         get_verified_payment_account,
+        get_employee_live_gl_balance,
         send_custody_whatsapp_notification,
         verify_user_authorization
     )
@@ -1938,7 +2229,8 @@ def execute_confirmed_financial_operation(
         )
 
     # 3. Check Idempotency (Phase 2 Step 9)
-    existing_jv = frappe.db.get_value("Journal Entry", {"user_remark": ["like", f"%[{target_op_id}]%"]}, ["name", "docstatus"], as_dict=True)
+    existing_jv = frappe.db.get_value("Journal Entry", {"cheque_no": target_op_id}, ["name", "docstatus"], as_dict=True) or \
+                  frappe.db.get_value("Journal Entry", {"user_remark": ["like", f"%[{target_op_id}]%"]}, ["name", "docstatus"], as_dict=True)
     if existing_jv:
         # Already executed! Invalidate cache to prevent any loop
         frappe.cache().delete_value(f"pending_fin_op:{target_op_id}")
@@ -1955,87 +2247,166 @@ def execute_confirmed_financial_operation(
             message=f"العملية منفذة مسبقاً برقم القيد {existing_jv.name} لتفادي التكرار."
         )
 
-    # 4. Build and Insert Journal Entry
+    # 4. Build and Insert Journal Entry based on validated operation_type
     comp_name = op_data["company"]
     emp_id = op_data["employee_id"]
     emp_name = op_data["employee_name"]
-    amount = op_data["amount"]
-    expense_category = op_data.get("expense_category", "fuel")
-    vehicle_type = op_data.get("vehicle_type", "commercial_equipment")
-    tax_status = op_data.get("tax_status", "inclusive")
-    has_invoice = op_data.get("has_tax_invoice", 1)
-
-    exp_account = get_verified_account_for_category(expense_category, comp_name)
-    custody_account, _ = get_verified_payment_account("custody", comp_name)
-    tax_accounts = get_company_tax_accounts(comp_name)
-
-    tax_eval = evaluate_vat_eligibility_and_split(
-        amount=to_decimal(amount),
-        account_code=exp_account,
-        is_taxable=True if tax_status != "no_tax" else False,
-        amount_basis="inclusive" if tax_status == "inclusive" else "exclusive",
-        usage_type="commercial" if vehicle_type == "commercial_equipment" else "passenger_restricted",
-        has_valid_tax_invoice=bool(has_invoice),
-        company=comp_name
-    )
-
-    net_exp = tax_eval["net_expense"]
-    tax_eligible = tax_eval["tax_eligible"]
-    tax_pending = tax_eval["tax_pending"]
-    gross_total = tax_eval["gross_amount"]
+    amount = float(op_data["amount"])
+    op_type = op_data.get("operation_type", "custody_expense")
+    clean_desc = op_data.get("description") or ""
 
     je = frappe.new_doc("Journal Entry")
     je.voucher_type = "Journal Entry"
     je.company = comp_name
     je.posting_date = frappe.utils.nowdate()
-    user_rem = op_data.get("description") or f"تسوية مصروف {expense_category} من عهدة {emp_name} ({emp_id})"
-    je.user_remark = f"{user_rem} [{target_op_id}]"
+    je.cheque_no = target_op_id  # Store audit op_id in cheque_no to prevent remark pollution
+    je.cheque_date = frappe.utils.nowdate()
+    je.user_remark = clean_desc
 
-    # Debit Expense
-    je.append("accounts", {
-        "account": exp_account,
-        "debit_in_account_currency": float(net_exp),
-        "credit_in_account_currency": 0.0,
-        "debit": float(net_exp),
-        "credit": 0.0,
-        "cost_center": "رئيسي - Rkn",
-        "user_remark": user_rem
-    })
+    net_exp = amount
+    tax_eligible = 0.0
+    tax_pending = 0.0
+    gross_total = amount
+    intent_title = "إشعار معاملة مالية"
 
-    # Debit VAT if applicable
-    if tax_eligible > Decimal("0.00"):
+    # ── CASE 1: Custody Disbursement / Replenishment ──
+    if op_type == "custody_disbursement":
+        custody_account, _ = get_verified_payment_account("custody", comp_name)
+        payment_source = op_data.get("payment_source", "bank")
+        source_account, source_type = get_verified_payment_account(payment_source, comp_name)
+
+        # Debit: Custody Account (1120) with Party Type = Employee
         je.append("accounts", {
-            "account": tax_accounts["recoverable_vat"],
-            "debit_in_account_currency": float(tax_eligible),
+            "account": custody_account,
+            "party_type": "Employee",
+            "party": emp_id,
+            "debit_in_account_currency": amount,
             "credit_in_account_currency": 0.0,
-            "debit": float(tax_eligible),
+            "debit": amount,
             "credit": 0.0,
             "cost_center": "رئيسي - Rkn",
-            "user_remark": "ضريبة مدخلات 15% مستردة - ZATCA المادة 50"
-        })
-    elif tax_pending > Decimal("0.00"):
-        je.append("accounts", {
-            "account": tax_accounts["pending_vat"],
-            "debit_in_account_currency": float(tax_pending),
-            "credit_in_account_currency": 0.0,
-            "debit": float(tax_pending),
-            "credit": 0.0,
-            "cost_center": "رئيسي - Rkn",
-            "user_remark": "ضريبة مدخلات معلقة قيد المراجعة الضريبية"
+            "user_remark": f"تغذية عهدة نقدية للموظف: {emp_name} ({emp_id})"
         })
 
-    # Credit Custody Account 1120 with Party Type = Employee
-    je.append("accounts", {
-        "account": custody_account,
-        "party_type": "Employee",
-        "party": emp_id,
-        "debit_in_account_currency": 0.0,
-        "credit_in_account_currency": float(gross_total),
-        "debit": 0.0,
-        "credit": float(gross_total),
-        "cost_center": "رئيسي - Rkn",
-        "user_remark": f"تسوية عهدة الموظف: {emp_name} ({emp_id})"
-    })
+        # Credit: Bank or Cash Account
+        je.append("accounts", {
+            "account": source_account,
+            "party_type": None,
+            "party": None,
+            "debit_in_account_currency": 0.0,
+            "credit_in_account_currency": amount,
+            "debit": 0.0,
+            "credit": amount,
+            "cost_center": "رئيسي - Rkn",
+            "user_remark": f"صرف تحويل عهدة من حساب {source_type}"
+        })
+        intent_title = "إشعار إضافة وتغذية عهدة"
+
+    # ── CASE 2: Custody Expense Settlement ──
+    elif op_type == "custody_expense":
+        expense_category = op_data.get("expense_category", "fuel")
+        vehicle_type = op_data.get("vehicle_type", "commercial_equipment")
+        tax_status = op_data.get("tax_status", "inclusive")
+        has_invoice = op_data.get("has_tax_invoice", 1)
+
+        exp_account = get_verified_account_for_category(expense_category, comp_name)
+        custody_account, _ = get_verified_payment_account("custody", comp_name)
+        tax_accounts = get_company_tax_accounts(comp_name)
+
+        tax_eval = evaluate_vat_eligibility_and_split(
+            amount=to_decimal(amount),
+            account_code=exp_account,
+            is_taxable=True if tax_status != "no_tax" else False,
+            amount_basis="inclusive" if tax_status == "inclusive" else "exclusive",
+            usage_type="commercial" if vehicle_type == "commercial_equipment" else "passenger_restricted",
+            has_valid_tax_invoice=bool(has_invoice),
+            company=comp_name
+        )
+
+        net_exp = float(tax_eval["net_expense"])
+        tax_eligible = float(tax_eval["tax_eligible"])
+        tax_pending = float(tax_eval["tax_pending"])
+        gross_total = float(tax_eval["gross_amount"])
+
+        # Debit Expense
+        je.append("accounts", {
+            "account": exp_account,
+            "debit_in_account_currency": net_exp,
+            "credit_in_account_currency": 0.0,
+            "debit": net_exp,
+            "credit": 0.0,
+            "cost_center": "رئيسي - Rkn",
+            "user_remark": clean_desc
+        })
+
+        # Debit VAT if applicable
+        if tax_eligible > 0.0:
+            je.append("accounts", {
+                "account": tax_accounts["recoverable_vat"],
+                "debit_in_account_currency": tax_eligible,
+                "credit_in_account_currency": 0.0,
+                "debit": tax_eligible,
+                "credit": 0.0,
+                "cost_center": "رئيسي - Rkn",
+                "user_remark": "ضريبة مدخلات 15% مستردة - ZATCA المادة 50"
+            })
+        elif tax_pending > 0.0:
+            je.append("accounts", {
+                "account": tax_accounts["pending_vat"],
+                "debit_in_account_currency": tax_pending,
+                "credit_in_account_currency": 0.0,
+                "debit": tax_pending,
+                "credit": 0.0,
+                "cost_center": "رئيسي - Rkn",
+                "user_remark": "ضريبة مدخلات معلقة قيد المراجعة الضريبية"
+            })
+
+        # Credit Custody Account 1120 with Party Type = Employee
+        je.append("accounts", {
+            "account": custody_account,
+            "party_type": "Employee",
+            "party": emp_id,
+            "debit_in_account_currency": 0.0,
+            "credit_in_account_currency": gross_total,
+            "debit": 0.0,
+            "credit": gross_total,
+            "cost_center": "رئيسي - Rkn",
+            "user_remark": f"تسوية عهدة الموظف: {emp_name} ({emp_id})"
+        })
+        intent_title = "إشعار خصم وتسوية مصروف من العهدة"
+
+    # ── CASE 3: Personal Salary Advance ──
+    elif op_type == "salary_advance":
+        advance_account, _ = get_verified_payment_account("advance", comp_name)
+        payment_source = op_data.get("payment_source", "bank")
+        source_account, source_type = get_verified_payment_account(payment_source, comp_name)
+
+        # Debit: Advance Account (1610) with Party Type = Employee
+        je.append("accounts", {
+            "account": advance_account,
+            "party_type": "Employee",
+            "party": emp_id,
+            "debit_in_account_currency": amount,
+            "credit_in_account_currency": 0.0,
+            "debit": amount,
+            "credit": 0.0,
+            "cost_center": "رئيسي - Rkn",
+            "user_remark": f"صرف سلفة شخصية للموظف: {emp_name} ({emp_id})"
+        })
+
+        # Credit: Bank or Cash Account
+        je.append("accounts", {
+            "account": source_account,
+            "party_type": None,
+            "party": None,
+            "debit_in_account_currency": 0.0,
+            "credit_in_account_currency": amount,
+            "debit": 0.0,
+            "credit": amount,
+            "cost_center": "رئيسي - Rkn",
+            "user_remark": f"صرف سلفة من حساب {source_type}"
+        })
+        intent_title = "إشعار صرف سلفة شخصية"
 
     je.insert(ignore_permissions=True)
 
@@ -2071,20 +2442,55 @@ def execute_confirmed_financial_operation(
     frappe.cache().delete_value(f"latest_user_pending_op:{frappe.session.user}")
 
     doc_url = frappe.utils.get_url_to_form("Journal Entry", je.name)
-
     action_text = "اعتماد وترحيل" if je.docstatus == 1 else "إنشاء مسودة"
-    success_msg = (
-        f"✅ *تم {action_text} القيد المحاسبي بنجاح في النظام 🧾*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔖 *رقم القيد:* `{je.name}`\n"
-        f"📄 *الحالة:* {'معتمد (Submitted)' if je.docstatus == 1 else 'مسودة (Draft)'}\n"
-        f"👤 *الموظف:* {emp_name} (`{emp_id}`)\n"
-        f"💵 *المبلغ الصافي:* {float(net_exp):,.2f} ريال\n"
-        f"🏛️ *ضريبة القيمة المضافة:* {float(tax_eligible + tax_pending):,.2f} ريال\n"
-        f"💰 *المبلغ الإجمالي:* {float(gross_total):,.2f} ريال\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔗 *رابط المستند المباشر:*\n{doc_url}"
-    )
+
+    # Query live GL balance after submit
+    live_bal = get_employee_live_gl_balance(employee=emp_id, company=comp_name)
+    posted_custody = live_bal.get("posted_custody_balance", 0.0)
+    posted_advance = live_bal.get("posted_salary_advance_balance", 0.0)
+
+    if op_type == "custody_disbursement":
+        success_msg = (
+            f"✅ *تم {action_text} قيد تغذية العهدة بنجاح في النظام 🧾*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔖 *رقم القيد:* `{je.name}`\n"
+            f"📄 *الحالة:* {'معتمد (Submitted)' if je.docstatus == 1 else 'مسودة (Draft)'}\n"
+            f"👤 *الموظف:* {emp_name} (`{emp_id}`)\n"
+            f"💰 *المبلغ المودع:* {amount:,.2f} ريال سعودي\n"
+            f"🏦 *حساب المصدر:* `{source_account}`\n"
+            f"📥 *حساب العهدة:* `{custody_account}`\n"
+            f"📊 *رصيد العهدة الفعلي بعد الإيداع:* `{posted_custody:,.2f}` ريال\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 *رابط المستند المباشر:*\n{doc_url}"
+        )
+    elif op_type == "salary_advance":
+        success_msg = (
+            f"✅ *تم {action_text} قيد صرف السلفة بنجاح في النظام 🧾*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔖 *رقم القيد:* `{je.name}`\n"
+            f"📄 *الحالة:* {'معتمد (Submitted)' if je.docstatus == 1 else 'مسودة (Draft)'}\n"
+            f"👤 *الموظف:* {emp_name} (`{emp_id}`)\n"
+            f"💰 *مبلغ السلفة:* {amount:,.2f} ريال سعودي\n"
+            f"🏦 *حساب المصدر:* `{source_account}`\n"
+            f"📥 *حساب السلف:* `{advance_account}`\n"
+            f"📊 *رصيد السلف الفعلي بعد الصرف:* `{posted_advance:,.2f}` ريال\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 *رابط المستند المباشر:*\n{doc_url}"
+        )
+    else:
+        success_msg = (
+            f"✅ *تم {action_text} القيد المحاسبي بنجاح في النظام 🧾*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔖 *رقم القيد:* `{je.name}`\n"
+            f"📄 *الحالة:* {'معتمد (Submitted)' if je.docstatus == 1 else 'مسودة (Draft)'}\n"
+            f"👤 *الموظف:* {emp_name} (`{emp_id}`)\n"
+            f"💵 *المبلغ الصافي:* {net_exp:,.2f} ريال\n"
+            f"🏛️ *ضريبة القيمة المضافة:* {tax_eligible + tax_pending:,.2f} ريال\n"
+            f"💰 *المبلغ الإجمالي:* {gross_total:,.2f} ريال\n"
+            f"📊 *رصيد العهدة المتبقي بعد الخصم:* `{posted_custody:,.2f}` ريال\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 *رابط المستند المباشر:*\n{doc_url}"
+        )
 
     return format_tool_response(
         success=True,
@@ -2097,9 +2503,12 @@ def execute_confirmed_financial_operation(
         document_url=doc_url,
         message=success_msg,
         extra={
+            "operation_type": op_type,
             "net_amount": float(net_exp),
             "tax_amount": float(tax_eligible + tax_pending),
-            "total_amount": float(gross_total)
+            "total_amount": float(gross_total),
+            "posted_custody_balance": posted_custody,
+            "posted_advance_balance": posted_advance
         }
     )
 

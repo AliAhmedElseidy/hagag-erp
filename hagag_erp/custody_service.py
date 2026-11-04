@@ -459,10 +459,28 @@ def classify_accounting_intent(text: str) -> dict:
     # 5. Intent C: Issue or replenish employee custody
     issue_custody_keywords = [
         "تم دفع عهدة", "دفع عهدة", "ارسال عهدة", "إرسال عهدة", "تحويل عهدة",
-        "صرف عهدة", "تغذية عهدة", "تجديد عهدة", "عهدة جديدة", "تسليم عهدة"
+        "صرف عهدة", "تغذية عهدة", "تجديد عهدة", "عهدة جديدة", "تسليم عهدة",
+        "تم تحويل عهدة", "تم صرف عهدة", "تم تغذية عهدة", "تم ايداع عهدة", "ايداع عهدة"
     ]
-    if _has_match(norm, issue_custody_keywords):
-        pm = "bank" if _has_match(norm, ["بنك", "تحويل", "حساب", "شيك", "شبكة"]) else "cash"
+    # Enhanced co-occurrence: disbursement verbs with custody words
+    disbursement_verbs = [
+        "تحويل", "تم تحويل", "تغذية", "تم تغذية", "صرف", "تم صرف", "ارسال",
+        "تم ارسال", "ايداع", "تم ايداع", "دفع", "تم دفع", "تسليم", "زوّد", "تزويد",
+        "حولت", "تم تحويل مبلغ", "تحويل مبلغ"
+    ]
+    custody_words = ["عهدة", "عهدته", "عهدتها", "العهدة", "عهد"]
+    expense_words = [
+        "من عهدة", "من عهدتي", "من العهدة", "خصما من", "مسددة من", "فاتورة",
+        "بنزين", "ديزل", "صيانة", "قطع غيار", "مشتريات", "شراء", "إيجار", "مصروف",
+        "سكن", "فندق", "مطعم", "إعاشة", "ضيافة"
+    ]
+
+    has_disb_verb = any(v in norm for v in disbursement_verbs)
+    has_custody = any(c in norm for c in custody_words)
+    has_expense = any(e in norm for e in expense_words)
+
+    if (_has_match(norm, issue_custody_keywords) or (has_disb_verb and has_custody and not has_expense)):
+        pm = "bank" if _has_match(norm, ["بنك", "تحويل", "حساب", "شيك", "شبكة", "أهلي", "اهلي", "snb", "مصرف"]) else "cash"
         return {
             "intent": INTENT_C_ISSUE_REPLENISH_CUSTODY,
             "amount": amount,
@@ -572,26 +590,32 @@ def get_verified_payment_account(payment_method: str, company: str = None) -> tu
     comp_name, abbr = get_target_company(company)
     comp_doc = frappe.get_doc("Company", comp_name)
 
-    if payment_method == "bank":
-        acc = comp_doc.default_bank_account or f"1201 - البنك الأهلي السعودي (SNB) - {abbr}"
+    pm = (payment_method or "cash").lower()
+
+    if pm in ("bank", "snb", "alahli", "ahli", "البنك الاهلي", "البنك الأهلي"):
+        acc = f"1201 - البنك الأهلي السعودي (SNB) - {abbr}"
         if not frappe.db.exists("Account", acc):
-            acc = frappe.db.get_value("Account", {"company": comp_name, "account_type": "Bank", "is_group": 0}, "name")
+            acc = comp_doc.default_bank_account or frappe.db.get_value("Account", {"company": comp_name, "account_type": "Bank", "is_group": 0}, "name")
         return acc, "Bank"
 
-    if payment_method == "custody":
-        # Check company-specific site custody cash account
+    if pm in ("custody", "عهدة", "عهد"):
         custody_acc = f"1120 - عهد نقدية للمهندسين والمشرفين - {abbr}"
         if frappe.db.exists("Account", custody_acc):
-            return custody_acc, "Cash"
-        # Or company default employee advance account
+            return custody_acc, "Receivable"
         if comp_doc.default_employee_advance_account:
-            return comp_doc.default_employee_advance_account, "Advance"
+            return comp_doc.default_employee_advance_account, "Receivable"
         return f"1110 - نقد - {abbr}", "Cash"
 
-    # Default to Cash
-    acc = comp_doc.default_cash_account or f"1110 - نقد - {abbr}"
+    if pm in ("advance", "salary_advance", "سلفة", "سلف"):
+        advance_acc = f"1610 - سلف الموظفين - {abbr}"
+        if frappe.db.exists("Account", advance_acc):
+            return advance_acc, "Receivable"
+        return f"1610 - سلف الموظفين - {abbr}", "Receivable"
+
+    # Default to Cash (1110)
+    acc = f"1110 - نقد - {abbr}"
     if not frappe.db.exists("Account", acc):
-        acc = frappe.db.get_value("Account", {"company": comp_name, "account_type": "Cash", "is_group": 0}, "name")
+        acc = comp_doc.default_cash_account or frappe.db.get_value("Account", {"company": comp_name, "account_type": "Cash", "is_group": 0}, "name")
     return acc, "Cash"
 
 
@@ -1796,10 +1820,17 @@ def notify_employee_custody_event(doc, method=None) -> dict:
         posted_custody = live_bal.get("posted_custody_balance", 0.0)
         posted_advance = live_bal.get("posted_salary_advance_balance", 0.0)
 
+        # Clean purpose: strip internal OP-PREV codes from employee-facing messages
+        clean_purpose = re.sub(r"\[OP-PREV[^\]]*\]", "", purpose or "").strip()
+        if not clean_purpose:
+            clean_purpose = purpose or "تسوية قيد محاسبي معتمد"
+
         if "سلفة" in title or doctype == "Additional Salary":
-            balance_line = f"📊 *رصيد السلف المقيد المتبقي:* `{posted_advance:,.2f}` ريال"
+            balance_line = f"📊 *رصيد السلف المقيد:* `{posted_advance:,.2f}` ريال"
+        elif "تغذية" in title or "إضافة" in title:
+            balance_line = f"📊 *رصيد العهدة الفعلي بعد الإيداع:* `{posted_custody:,.2f}` ريال"
         else:
-            balance_line = f"📊 *رصيد العهدة المقيد المتبقي:* `{posted_custody:,.2f}` ريال"
+            balance_line = f"📊 *رصيد العهدة المتبقي بعد الخصم:* `{posted_custody:,.2f}` ريال"
 
         # Saudi Time (12-hour Asia/Riyadh format)
         try:
@@ -1821,7 +1852,7 @@ def notify_employee_custody_event(doc, method=None) -> dict:
             f"💰 *المبلغ:* {float(amount):,.2f} ريال سعودي\n"
             f"📄 *المستند:* `{doc.name}` ({doc_date})\n"
             f"⏰ *التوقيت:* {saudi_time}\n"
-            f"📝 *البيان:* {purpose}\n"
+            f"📝 *البيان:* {clean_purpose}\n"
             f"{balance_line}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🏢 *الشركة:* {comp or 'ركن سبل الأفق'}\n"

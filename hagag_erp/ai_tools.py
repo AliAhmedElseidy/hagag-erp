@@ -331,6 +331,7 @@ def create_draft_journal_entry(
     user_remark=None,
     party_type=None,
     party=None,
+    employee=None,
     amount_basis=None,
     usage_type=None,
     has_valid_tax_invoice=None,
@@ -493,8 +494,11 @@ def create_draft_journal_entry(
                 "user_remark": user_remark or "سداد / استحقاق"
             }
             if credit_doc.get("account_type") in ["Receivable", "Payable"]:
-                credit_line["party_type"] = party_type or ("Customer" if credit_doc.get("account_type") == "Receivable" else "Supplier")
-                credit_line["party"] = party
+                default_pt = "Customer" if credit_doc.get("account_type") == "Receivable" else "Supplier"
+                if any(k in credit_acc_name for k in ["1120", "1610", "عهد", "سلف"]):
+                    default_pt = "Employee"
+                credit_line["party_type"] = party_type or default_pt
+                credit_line["party"] = party or employee or kwargs.get("employee_id")
             lines.append(credit_line)
 
         else:
@@ -508,8 +512,11 @@ def create_draft_journal_entry(
                 "user_remark": user_remark or "قيد مدين"
             }
             if debit_doc.get("account_type") in ["Receivable", "Payable"]:
-                debit_line["party_type"] = party_type or ("Customer" if debit_doc.get("account_type") == "Receivable" else "Supplier")
-                debit_line["party"] = party
+                default_pt = "Customer" if debit_doc.get("account_type") == "Receivable" else "Supplier"
+                if any(k in debit_acc_name for k in ["1120", "1610", "عهد", "سلف"]):
+                    default_pt = "Employee"
+                debit_line["party_type"] = party_type or default_pt
+                debit_line["party"] = party or employee or kwargs.get("employee_id")
             lines.append(debit_line)
 
             credit_line = {
@@ -521,8 +528,11 @@ def create_draft_journal_entry(
                 "user_remark": user_remark or "قيد دائن"
             }
             if credit_doc.get("account_type") in ["Receivable", "Payable"]:
-                credit_line["party_type"] = party_type or ("Customer" if credit_doc.get("account_type") == "Receivable" else "Supplier")
-                credit_line["party"] = party
+                default_pt = "Customer" if credit_doc.get("account_type") == "Receivable" else "Supplier"
+                if any(k in credit_acc_name for k in ["1120", "1610", "عهد", "سلف"]):
+                    default_pt = "Employee"
+                credit_line["party_type"] = party_type or default_pt
+                credit_line["party"] = party or employee or kwargs.get("employee_id")
             lines.append(credit_line)
 
         # Enforce exact balance and input VAT debit-only rule
@@ -688,6 +698,7 @@ def get_warehouse_stock(item_code=None, warehouse=None):
 def create_custody_settlement_entry(
     lines=None,
     custody_account=None,
+    employee=None,
     cost_center=None,
     project=None,
     user_remark=None,
@@ -707,7 +718,7 @@ def create_custody_settlement_entry(
         op_id = generate_operation_id(prefix="CUSTODY", message_id=kwargs.get("message_id"))
 
     def _execute(target_op_id):
-        nonlocal lines, custody_account, cost_center, project, user_remark, contract_type, tax_treatment_policy
+        nonlocal lines, custody_account, employee, cost_center, project, user_remark, contract_type, tax_treatment_policy
 
         if not lines:
             lines = kwargs.get("items") or kwargs.get("items_json") or kwargs.get("settlement_items") or kwargs.get("expenses")
@@ -892,9 +903,11 @@ def create_custody_settlement_entry(
                 "user_remark": "ضريبة مدخلات غير مستردة (مصروف)"
             })
 
-        # Credit Line: Custody Account
+        # Credit Line: Custody Account (Party Type = Employee)
         entry_lines.append({
             "account": custody_account,
+            "party_type": "Employee" if employee else None,
+            "party": employee,
             "debit": Decimal("0.00"),
             "credit": total_gross,
             "cost_center": cost_center,
@@ -925,14 +938,18 @@ def create_custody_settlement_entry(
         je.custom_has_valid_tax_invoice = 0 if has_pending else 1
 
         for line in entry_lines:
-            je.append("accounts", {
+            acc_row = {
                 "account": line["account"],
                 "debit_in_account_currency": float(line["debit"]),
                 "credit_in_account_currency": float(line["credit"]),
                 "cost_center": line.get("cost_center"),
                 "project": line.get("project"),
                 "user_remark": line.get("user_remark")
-            })
+            }
+            if line.get("party_type") and line.get("party"):
+                acc_row["party_type"] = line["party_type"]
+                acc_row["party"] = line["party"]
+            je.append("accounts", acc_row)
 
         je.docstatus = 0
         je.flags.ignore_permissions = True
@@ -1552,9 +1569,11 @@ def record_employee_custody_expense(
             "user_remark": "ضريبة مدخلات معلقة قيد المراجعة الضريبية (المادة 50)"
         })
 
-    # Credit Custody Account (1120) - Party MUST be None
+    # Credit Custody Account (1120) - Party Type = Employee
     je.append("accounts", {
         "account": custody_account,
+        "party_type": "Employee",
+        "party": emp_id,
         "debit_in_account_currency": 0.0,
         "credit_in_account_currency": float(gross_total),
         "debit": 0.0,

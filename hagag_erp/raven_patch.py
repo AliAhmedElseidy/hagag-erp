@@ -554,10 +554,16 @@ async def handle_ai_request_async(
 								}
 								tools_param.append(tool_def)
 
-					# Add instruction to encourage immediate tool use
+					# Add instruction to encourage immediate tool use & anti-duplication
 					enhanced_instructions = (
 						agent.instructions
-						+ "\n\nIMPORTANT: When asked to perform an action, use your tools immediately. Do not overthink. Keep responses brief and action-oriented. When asked to improve something, propose a specific solution immediately. File content from uploaded documents is automatically extracted and included in the conversation - DO NOT use the analyze_conversation_file tool for files that are already in the conversation context, just use the extracted content provided."
+						+ "\n\nCRITICAL ACCOUNTING & ANTI-DUPLICATION INSTRUCTIONS:\n"
+						+ "1. IDEMPOTENCY: Under no circumstances should you re-execute financial transactions (disbursements, custody entries, expenses) that were discussed or executed in earlier messages in the conversation history. Only execute a transaction if it is newly, explicitly requested in the latest user message.\n"
+						+ "2. BALANCE INQUIRIES: When the user asks for balance, report, or status, ONLY call get_gl_balance or get_employee_custody_report. NEVER create a Journal Entry or expense document for a balance inquiry!\n"
+						+ "3. OPERATIONAL CUSTODY (Intent 1): When disbursing custody (e.g. اصرف عهدة 500 ريال لعلي الصعيدي), create Journal Entry with Debit: 1120 (عهد نقدية) and Party Type='Employee', Party=employee_id, Credit: 1110 (نقد).\n"
+						+ "4. CUSTODY EXPENSE SETTLEMENT (Intent 2): When settling expense from custody (e.g. سجل فاتورة بنزين 230 ريال من عهدة علي الصعيدي), Debit: 5120 (مصروف), Debit: 1510 (VAT 15% if commercial/valid), Credit: 1120 (عهد نقدية) with Party Type='Employee', Party=employee_id. NEVER create a custody disbursement when recording an expense!\n"
+						+ "5. PERSONAL ADVANCE (Intent 3): When disbursing a personal salary advance, Debit: 1610 (سلف الموظفين) with Party Type='Employee', Party=employee_id, Credit: 1110.\n"
+						+ "6. Keep responses brief, professional, and in Arabic."
 					)
 
 					# Build messages array with proper conversation history (plain string content for Gemini OpenAI API)

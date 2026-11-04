@@ -377,14 +377,18 @@ def create_draft_journal_entry(
     jv.user_remark = f"[{reference_id}] {user_remark}" if reference_id else (user_remark or "")
 
     for row in accounts_data:
-        jv.append("accounts", {
+        acc_dict = {
             "account": row.get("account"),
             "debit_in_account_currency": frappe.utils.flt(row.get("debit", 0.0)),
             "credit_in_account_currency": frappe.utils.flt(row.get("credit", 0.0)),
             "cost_center": row.get("cost_center"),
             "project": row.get("project"),
             "user_remark": row.get("user_remark")
-        })
+        }
+        if row.get("party_type") and row.get("party"):
+            acc_dict["party_type"] = row.get("party_type")
+            acc_dict["party"] = row.get("party")
+        jv.append("accounts", acc_dict)
 
     jv.flags.ignore_permissions = True
     jv.insert()

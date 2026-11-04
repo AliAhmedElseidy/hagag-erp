@@ -224,62 +224,80 @@ def logout_baileys_internal(hub_doc=None) -> dict:
 # AI Provider Engine & Local Fallback
 # ──────────────────────────────────────────────────────────────────────────────
 
-def call_ai_api(user_message: str, provider: str, api_key: str, model: str, system_prompt: str) -> str:
+def call_ai_api(
+	user_message: str,
+	provider: str = "Gemini",
+	api_key: str = None,
+	model: str = "Gemini 3.5 Flash Lite",
+	system_prompt: str = None,
+	context_history: list = None
+) -> dict:
 	"""
 	Calls AI API (Gemini or OpenAI-compatible) with strict error isolation and timeout.
-	Falls back to local intelligent response if the provider is unavailable.
+	Returns dict: {"status": "ok"|"error", "reply": str, "error": str}
+	Never masks API failures with repeated welcome templates.
 	"""
-	if not api_key or not model:
-		return generate_local_fallback_reply(user_message, "لم يتم تكوين مفتاح الذكاء الاصطناعي")
+	if not api_key:
+		return {"status": "error", "error": "لم يتم تكوين مفتاح الذكاء الاصطناعي"}
 
 	clean_model = (model or "").strip()
 	if provider == "Gemini":
-		# Normalize model identifier if user typed display name
 		model_map = {
-			"gemini 3.5 flash lite": "gemini-2.5-flash",
-			"gemini 3.8 flash": "gemini-2.5-flash",
-			"gemini 2.5 flash": "gemini-2.5-flash",
-			"gemini-flash": "gemini-2.5-flash",
-			"gemini flash": "gemini-2.5-flash"
+			"gemini 3.5 flash lite": "gemini-3.5-flash-lite",
+			"gemini-3.5-flash-lite": "gemini-3.5-flash-lite",
+			"gemini 3.8 flash": "gemini-3.5-flash-lite",
+			"gemini 2.5 flash": "gemini-3.5-flash-lite",
+			"gemini-2.5-flash": "gemini-3.5-flash-lite",
+			"gemini 1.5 flash": "gemini-3.5-flash-lite",
+			"gemini-1.5-flash": "gemini-3.5-flash-lite",
+			"gemini-flash": "gemini-3.5-flash-lite",
+			"gemini flash": "gemini-3.5-flash-lite"
 		}
-		clean_model = model_map.get(clean_model.lower(), clean_model)
-		if not clean_model:
-			clean_model = "gemini-2.5-flash"
+		clean_model = model_map.get(clean_model.lower(), "gemini-3.5-flash-lite")
 
 	try:
 		if provider == "Gemini":
 			url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={api_key}"
+
+			contents = []
+			if context_history and isinstance(context_history, list):
+				for turn in context_history:
+					if turn.get("user"):
+						contents.append({"role": "user", "parts": [{"text": turn["user"]}]})
+					if turn.get("model"):
+						contents.append({"role": "model", "parts": [{"text": turn["model"]}]})
+			contents.append({"role": "user", "parts": [{"text": user_message}]})
+
 			payload = {
-				"contents": [
-					{"role": "user", "parts": [{"text": user_message}]}
-				],
+				"contents": contents,
 				"systemInstruction": {
-					"parts": [{"text": system_prompt or "أنت المساعد الذكي لشركة الصعيدي للمقاولات."}]
+					"parts": [{"text": system_prompt or "أنت المساعد المالي والإداري لمنظومة الصعيدي (شركة ركن سبل الأفق للمقاولات). أجب بأسلوب مهني، مباشر، وموجز باللغة العربية دون استبدال الأسئلة المحاسبية بقوائم ثابتة."}]
 				},
 				"generationConfig": {
 					"maxOutputTokens": 600,
-					"temperature": 0.7
+					"temperature": 0.6
 				}
 			}
-			resp = requests.post(url, json=payload, timeout=25)
+			resp = requests.post(url, json=payload, timeout=20)
 			data = resp.json()
 
 			if resp.status_code != 200:
 				err = data.get("error", {}).get("message", str(resp.status_code))
-				frappe.log_error(f"Gemini API Error: {err}", "Elsaidy WhatsApp Hub AI")
-				return generate_local_fallback_reply(user_message, f"خطأ في الاتصال بالنموذج [{err[:40]}]")
+				frappe.log_error(f"Gemini API Error [{resp.status_code}]: {err}", "Elsaidy WhatsApp Hub AI")
+				return {"status": "error", "error": f"خطأ في الاتصال بالنموذج ({resp.status_code}): {err}"}
 
 			candidates = data.get("candidates", [])
 			if not candidates:
-				return generate_local_fallback_reply(user_message, "لم يقدم النموذج رداً")
+				return {"status": "error", "error": "لم يقدم النموذج رداً"}
 
-			return (
+			reply_text = (
 				candidates[0]
 				.get("content", {})
 				.get("parts", [{}])[0]
 				.get("text", "")
 				.strip()
 			)
+			return {"status": "ok", "reply": reply_text}
 
 		elif provider in ("OpenAI", "Custom API"):
 			url = "https://api.openai.com/v1/chat/completions"
@@ -287,72 +305,203 @@ def call_ai_api(user_message: str, provider: str, api_key: str, model: str, syst
 				"Authorization": f"Bearer {api_key}",
 				"Content-Type": "application/json"
 			}
+			messages = [{"role": "system", "content": system_prompt or "أنت المساعد الذكي لشركة الصعيدي للمقاولات."}]
+			if context_history and isinstance(context_history, list):
+				for turn in context_history:
+					if turn.get("user"):
+						messages.append({"role": "user", "content": turn["user"]})
+					if turn.get("model"):
+						messages.append({"role": "assistant", "content": turn["model"]})
+			messages.append({"role": "user", "content": user_message})
+
 			payload = {
 				"model": clean_model or "gpt-4o-mini",
-				"messages": [
-					{"role": "system", "content": system_prompt or "أنت المساعد الذكي لشركة الصعيدي للمقاولات."},
-					{"role": "user", "content": user_message}
-				],
+				"messages": messages,
 				"max_tokens": 600,
 				"temperature": 0.7
 			}
-			resp = requests.post(url, json=payload, headers=headers, timeout=25)
+			resp = requests.post(url, json=payload, headers=headers, timeout=20)
 			data = resp.json()
 
 			if resp.status_code != 200:
 				err = data.get("error", {}).get("message", str(resp.status_code))
 				frappe.log_error(f"OpenAI API Error: {err}", "Elsaidy WhatsApp Hub AI")
-				return generate_local_fallback_reply(user_message, f"خطأ في الاتصال [{err[:40]}]")
+				return {"status": "error", "error": f"خطأ في الاتصال ({resp.status_code}): {err}"}
 
-			return data["choices"][0]["message"]["content"].strip()
+			reply_text = data["choices"][0]["message"]["content"].strip()
+			return {"status": "ok", "reply": reply_text}
 
 		else:
-			return generate_local_fallback_reply(user_message, f"المزود {provider} غير مدعوم")
+			return {"status": "error", "error": f"المزود {provider} غير مدعوم"}
 
 	except requests.Timeout:
-		frappe.log_error("AI API Timeout (>25s)", "Elsaidy WhatsApp Hub AI")
-		return generate_local_fallback_reply(user_message, "تجاوز مهلة الاستجابة")
+		frappe.log_error("AI API Timeout (>20s)", "Elsaidy WhatsApp Hub AI")
+		return {"status": "error", "error": "تجاوز مهلة الاستجابة من خادم الذكاء الاصطناعي"}
 	except Exception as e:
 		frappe.log_error(f"AI API Exception: {str(e)}", "Elsaidy WhatsApp Hub AI")
-		return generate_local_fallback_reply(user_message, str(e))
+		return {"status": "error", "error": str(e)}
 
 
 def generate_local_fallback_reply(user_message: str, error_context: str = "") -> str:
 	"""
 	Local Rule-Based Fallback Engine.
-	Guarantees that WhatsApp never fails to respond even if external AI APIs are down.
+	Provides clear instructions only when explicitly requested or on system errors.
 	"""
-	norm = user_message.translate(ARABIC_TO_ASCII_DIGITS).lower()
-
-	if any(kw in norm for kw in ["رصيد", "ميزانية", "فلوس", "عهدة"]):
+	if error_context:
 		return (
-			"💰 *المساعد المالي لشركة الصعيدي*\n"
-			"━━━━━━━━━━━━━━━━━━━\n"
-			"يمكنك معرفة رصيد عهدتك بكتابة:\n"
-			"👉 *رصيد العهدة*\n"
-			"وسيقوم النظام بالاستعلام المباشر من القيود المحاسبية."
-		)
-
-	if any(kw in norm for kw in ["صرف", "دفع", "شراء", "فاتورة"]):
-		return (
-			"📝 *تسجيل المصاريف اليومية*\n"
-			"━━━━━━━━━━━━━━━━━━━\n"
-			"أرسل المصروف بالصيغة:\n"
-			"👉 *صرفت 500 ريال [البيان] لمشروع [اسم المشروع]*\n"
-			"وسيتكفل النظام بحساب ضريبة القيمة المضافة 15% وإنشاء القيد كمسودة."
+			f"⚠️ *تنبيه:* {error_context}\n"
+			f"━━━━━━━━━━━━━━━━━━━\n"
+			f"يمكنك استخدام الأوامر المباشرة المعتمدة:\n"
+			f"• *رصيد العهدة* — للاستعلام عن رصيدك المالي المعتمد.\n"
+			f"• *صرفت [المبلغ] ريال [البيان]* — لتسجيل مصروف عهدة جديد."
 		)
 
 	return (
 		"مرحباً بك في *منظومة الصعيدي الذكية* 🏗️\n"
-		"أنا المساعد الآلي لخدمتكم. يمكنك إرسال:\n"
-		"• تسجيل المصاريف: _صرفت 300 ريال ديزل لموقع الرياض_\n"
-		"• الاستعلام عن الرصيد: _رصيد العهدة_\n"
-		"وسأقوم بخدمتك على الفور."
+		"━━━━━━━━━━━━━━━━━━━\n"
+		"أنا المساعد المالي والإداري لخدمتكم. يمكنك استخدام:\n"
+		"• *رصيد العهدة* — لعرض رصيدك المالي المعتمد في دفتر الأستاذ العام.\n"
+		"• *صرفت 300 ريال ديزل* — لتسجيل مصروف عهدة والتأكيد قبل إنشاء المسودة.\n"
+		"• الاستفسارات المباشرة — وسأجيبك فوراً."
 	)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Natural Language Parsing (ZATCA & ERP)
+# Accounting & Custody Service Integration
+# ──────────────────────────────────────────────────────────────────────────────
+
+def query_employee_custody_balance(sender_phone: str, sender_lid: str = None) -> dict:
+	"""
+	Queries real posted custody balance directly from approved GL Entries in MariaDB.
+	Strictly enforces identity and authorization verification.
+	"""
+	norm_phone = normalize_phone_number(sender_phone)
+	if not norm_phone:
+		return {
+			"authorized": False,
+			"reply_source": "Accounting Tool",
+			"intent": "Identity Verification Required",
+			"reply": "🔒 *تنبيه أمني - التحقق من الهوية*\nتعذر تحديد رقم الهاتف للتحقق من الصلاحيات المالية."
+		}
+
+	# 1. Identity & Permissions Verification
+	contact_rule = None
+	rules = frappe.db.sql("""
+		SELECT * FROM `tabElsaidy WhatsApp Contact Rule`
+		WHERE is_active = 1
+		  AND (phone_number = %s OR phone_number LIKE %s OR (whatsapp_lid IS NOT NULL AND whatsapp_lid = %s))
+		LIMIT 1
+	""", (norm_phone, f"%{norm_phone[-9:]}", sender_lid or ""), as_dict=True)
+	if rules:
+		contact_rule = rules[0]
+
+	employee_doc = None
+	if contact_rule and contact_rule.get("employee"):
+		employee_doc = frappe.db.get_value("Employee", contact_rule["employee"], ["name", "employee_name", "status", "company"], as_dict=True)
+	
+	if not employee_doc:
+		emps = frappe.db.sql("""
+			SELECT name, employee_name, status, company
+			FROM `tabEmployee`
+			WHERE (cell_number = %s OR cell_number LIKE %s)
+			LIMIT 1
+		""", (norm_phone, f"%{norm_phone[-9:]}"), as_dict=True)
+		if emps:
+			employee_doc = emps[0]
+
+	# Check authorization
+	can_balance = bool(contact_rule.get("can_request_balance", 1)) if contact_rule else bool(employee_doc)
+	if not employee_doc or not can_balance:
+		return {
+			"authorized": False,
+			"reply_source": "Accounting Tool",
+			"intent": "Identity Verification Required",
+			"reply": (
+				"🔒 *تنبيه أمني - التحقق من الهوية*\n"
+				"━━━━━━━━━━━━━━━━━━━\n"
+				"عذراً، رقم الهاتف غير مسجل ضمن الموظفين المصرح لهم بالاطلاع على البيانات المالية والعهد.\n"
+				"يرجى التواصل مع الإدارة المالية لاعتماد رقمك في المنظومة."
+			)
+		}
+
+	# 2. Custody Account & GL Entries
+	company = (employee_doc.get("company") if employee_doc else None) or (contact_rule.get("company") if contact_rule else None) or "ركن سبل الافق"
+	custody_account = (contact_rule.get("default_custody_account") if contact_rule else None)
+	if not custody_account:
+		custody_account = "1120 - عهد نقدية للمهندسين والمشرفين - Rkn"
+
+	emp_name = employee_doc.get("employee_name") or (contact_rule.get("contact_name") if contact_rule else "الموظف")
+	emp_id = employee_doc.get("name") if employee_doc else (contact_rule.get("employee") if contact_rule else None)
+
+	# Query approved GL Entries (docstatus=1 strictly)
+	if emp_id:
+		gl_stats = frappe.db.sql("""
+			SELECT 
+				COALESCE(SUM(debit), 0) as total_debit,
+				COALESCE(SUM(credit), 0) as total_credit,
+				COALESCE(SUM(debit - credit), 0) as net_balance
+			FROM `tabGL Entry`
+			WHERE account = %s AND is_cancelled = 0 AND docstatus = 1
+			  AND ((party_type = 'Employee' AND party = %s) OR party IS NULL)
+		""", (custody_account, emp_id), as_dict=True)
+	else:
+		gl_stats = frappe.db.sql("""
+			SELECT 
+				COALESCE(SUM(debit), 0) as total_debit,
+				COALESCE(SUM(credit), 0) as total_credit,
+				COALESCE(SUM(debit - credit), 0) as net_balance
+			FROM `tabGL Entry`
+			WHERE account = %s AND is_cancelled = 0 AND docstatus = 1
+		""", (custody_account,), as_dict=True)
+	
+	stats = gl_stats[0] if gl_stats else {"total_debit": 0, "total_credit": 0, "net_balance": 0}
+	total_debit = flt(stats["total_debit"])
+	total_credit = flt(stats["total_credit"])
+	net_balance = flt(stats["net_balance"])
+
+	# Query pending draft entries (docstatus=0)
+	draft_stats = frappe.db.sql("""
+		SELECT COUNT(*) as draft_count, COALESCE(SUM(total_debit), 0) as draft_total
+		FROM `tabJournal Entry`
+		WHERE docstatus = 0 AND company = %s
+	""", (company,), as_dict=True)
+	draft_count = cint(draft_stats[0]["draft_count"]) if draft_stats else 0
+	draft_total = flt(draft_stats[0]["draft_total"]) if draft_stats else 0.0
+
+	emp_name = employee_doc.get("employee_name") or (contact_rule.get("contact_name") if contact_rule else "الموظف")
+	emp_id = employee_doc.get("name") or "HR-EMP-00001"
+	acc_display = custody_account.split(" - ")[1] if " - " in custody_account else custody_account
+
+	reply_lines = [
+		"💰 *كشف رصيد العهدة المعتمد*",
+		"━━━━━━━━━━━━━━━━━━━",
+		f"👤 *الموظف:* {emp_name} (`{emp_id}`)",
+		f"🏢 *الشركة:* {company}",
+		f"🏦 *حساب العهدة:* {acc_display}",
+		"───────────────────",
+		f"📥 *إجمالي العهد المستلمة (مدين):* {total_debit:,.2f} ر.س",
+		f"📤 *إجمالي المصروفات المعتمدة (دائن):* {total_credit:,.2f} ر.س",
+		f"⚖️ *صافي الرصيد المتاح الفعلي:* `{net_balance:,.2f}` ر.س"
+	]
+	if draft_count > 0:
+		reply_lines.append(f"⏳ *حركات تحت المراجعة (مسودات):* {draft_count} قيد بقيمة {draft_total:,.2f} ر.س")
+	reply_lines.extend([
+		"━━━━━━━━━━━━━━━━━━━",
+		"ℹ️ *تم استخراج الرصيد مباشرة من دفتر الأستاذ العام المعتمد (GL Entry) بتوقيت الرياض.*"
+	])
+
+	return {
+		"authorized": True,
+		"reply_source": "Accounting Tool",
+		"intent": "Custody Balance Query",
+		"reply": "\n".join(reply_lines),
+		"balance": net_balance,
+		"employee_id": emp_id
+	}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Natural Language Parsing & Interactive Expenses
 # ──────────────────────────────────────────────────────────────────────────────
 
 def parse_expense_from_text(text: str) -> dict:
@@ -404,12 +553,205 @@ def parse_expense_from_text(text: str) -> dict:
 	}
 
 
+def process_expense_interactive(text: str, sender_phone: str, sender_name: str, contact_rule: dict = None, hub: dict = None) -> dict:
+	"""
+	Parses expense details and asks user for confirmation before creating draft.
+	Never auto-posts financial entries.
+	"""
+	parsed = parse_expense_from_text(text)
+	if not parsed or not parsed.get("amount") or parsed["amount"] <= 0:
+		return None
+
+	if contact_rule and not contact_rule.get("can_record_expenses", 1):
+		return {
+			"reply_source": "Accounting Tool",
+			"intent": "Expense Permission Denied",
+			"reply": "⛔ ليس لديك صلاحية تسجيل المصاريف عبر واتساب من هذا الرقم."
+		}
+
+	amount = flt(parsed["amount"])
+	is_inclusive = parsed.get("is_inclusive", True)
+	
+	# Detect expense category
+	norm = text.lower()
+	category = "مصروفات عامة"
+	if any(k in norm for k in ["ديزل", "بنزين", "وقود", "محروقات"]):
+		category = "وقود ومحروقات (ديزل/بنزين)"
+	elif any(k in norm for k in ["صيانة", "تصليح", "قطع غيار"]):
+		category = "صيانة وإصلاحات"
+	elif any(k in norm for k in ["سكن", "فندق", "إقامة"]):
+		category = "إقامة ومصاريف موقع"
+	elif any(k in norm for k in ["أدوات", "مواد", "مشتريات"]):
+		category = "مشتريات ومواد موقع"
+
+	# Detect project
+	target_project = contact_rule.get("default_project") if contact_rule else None
+	project_name = "عام (غير محدد)"
+	if target_project:
+		project_name = frappe.db.get_value("Project", target_project, "project_name") or target_project
+	else:
+		# Search if user mentioned project in text
+		projs = frappe.db.sql("SELECT name, project_name FROM `tabProject` WHERE status = 'Open'", as_dict=True)
+		for p in projs:
+			if p.project_name and p.project_name.lower() in norm:
+				target_project = p.name
+				project_name = p.project_name
+				break
+
+	# Save pending state in cache (15 min TTL)
+	cache_key = f"wa_conv_state_{sender_phone}"
+	frappe.cache().set_value(cache_key, {
+		"pending_action": "confirm_draft_expense",
+		"amount": amount,
+		"category": category,
+		"project": target_project,
+		"project_name": project_name,
+		"is_inclusive": is_inclusive,
+		"raw_text": text,
+		"timestamp": time.time()
+	}, expires_in_sec=900)
+
+	vat_str = "شامل الضريبة 15%" if is_inclusive else "قبل الضريبة (يضاف 15%)"
+	return {
+		"reply_source": "Accounting Tool",
+		"intent": "Expense Confirmation Request",
+		"reply": (
+			f"📝 *طلب تسجيل مصروف عهدة (مسودة)*\n"
+			f"━━━━━━━━━━━━━━━━━━━\n"
+			f"💵 *المبلغ:* {amount:,.2f} ر.س ({vat_str})\n"
+			f"🏷️ *التصنيف:* {category}\n"
+			f"🏗️ *المشروع:* {project_name}\n"
+			f"👤 *المسؤول:* {sender_name or sender_phone}\n"
+			f"━━━━━━━━━━━━━━━━━━━\n"
+			f"👉 هل تود إنشاء مسودة القيد الآن؟\n"
+			f"أرسل *أيوة* أو *تأكيد* للمتابعة، أو *لا* للإلغاء."
+		)
+	}
+
+
+def handle_conversation_context(text: str, sender_phone: str, sender_name: str, contact_rule: dict = None, hub: dict = None) -> dict:
+	"""
+	Evaluates user input against pending actions in conversation state (affirmations/negations/context).
+	"""
+	cache_key = f"wa_conv_state_{sender_phone}"
+	conv_state = frappe.cache().get_value(cache_key)
+	if not conv_state:
+		return None
+
+	norm = text.strip().lower()
+	is_affirmation = norm in [
+		"أيوة", "ايوة", "اه", "آه", "نعم", "تمام", "أكد", "تأكيد", "موافق", "yes", "ok",
+		"اكيد", "أكيد", "صحيح", "ايوه تمام", "أيوة تمام", "اعتمد", "سجل"
+	]
+	is_negation = norm in [
+		"لا", "لأ", "إلغاء", "الغاء", "تراجع", "مش دلوقتي", "cancel", "no", "لا شكرا", "لا شكراً"
+	]
+
+	pending_action = conv_state.get("pending_action")
+
+	# 1. Handle Pending Expense Confirmation
+	if pending_action == "confirm_draft_expense":
+		if is_affirmation:
+			from hagag_erp.tax_engine import calculate_zatca_tax, create_draft_journal_entry, get_company_tax_accounts
+
+			company = (hub.default_company if hub and hub.default_company else None) or "ركن سبل الافق"
+			amount = conv_state.get("amount", 0.0)
+			is_inclusive = conv_state.get("is_inclusive", True)
+			project = conv_state.get("project")
+			project_name = conv_state.get("project_name", "عام")
+			category = conv_state.get("category", "مصروفات عامة")
+			raw_text = conv_state.get("raw_text", text)
+
+			tax_calc = calculate_zatca_tax(Decimal(str(amount)), is_inclusive=is_inclusive)
+			tax_accs = get_company_tax_accounts(company)
+
+			expense_account = (hub.default_expense_account if hub and hub.default_expense_account else None) or tax_accs.get("default_expense_account")
+			vat_account = (hub.default_vat_account if hub and hub.default_vat_account else None) or tax_accs.get("input_vat_account")
+			credit_account = (contact_rule.get("default_custody_account") if contact_rule else None) or "1120 - عهد نقدية للمهندسين والمشرفين - Rkn"
+
+			if not expense_account:
+				expense_account = "5120 - مصروف الوقود والمحروقات - Rkn"
+			if not vat_account:
+				vat_account = frappe.db.get_value("Account", {"company": company, "account_type": "Tax", "is_group": 0}, "name")
+
+			cost_center = (contact_rule.get("default_cost_center") if contact_rule else None) or (hub.default_cost_center if hub else None) or "رئيسي - Rkn"
+
+			je_lines = [
+				{
+					"account": expense_account,
+					"debit": float(tax_calc["net_amount"]),
+					"credit": 0.0,
+					"project": project,
+					"cost_center": cost_center,
+					"user_remark": f"مصروف عبر واتساب ({category}): {raw_text[:140]}"
+				},
+				{
+					"account": vat_account,
+					"debit": float(tax_calc["tax_amount"]),
+					"credit": 0.0,
+					"project": project,
+					"cost_center": cost_center,
+					"user_remark": f"ضريبة القيمة المضافة 15% ZATCA: {raw_text[:140]}"
+				},
+				{
+					"account": credit_account,
+					"debit": 0.0,
+					"credit": float(tax_calc["total_amount"]),
+					"project": project,
+					"cost_center": cost_center,
+					"party_type": "Employee" if (contact_rule and contact_rule.get("employee")) else None,
+					"party": contact_rule.get("employee") if contact_rule else None,
+					"user_remark": f"دفعة من عهدة: {sender_name or sender_phone}"
+				}
+			]
+
+			jv = create_draft_journal_entry(
+				company=company,
+				accounts_data=je_lines,
+				user_remark=f"مصروف معتمد كمسودة عبر واتساب من {sender_name} ({sender_phone}).\nالبيان: {raw_text}",
+				reference_id=f"WA-CONF-{int(time.time())}"
+			)
+
+			# Clear cache state
+			frappe.cache().delete_value(cache_key)
+
+			doc_url = f"https://erp.elsaidy.org/app/journal-entry/{jv.name}"
+			return {
+				"reply_source": "Accounting Tool",
+				"intent": "Expense Draft Confirmed",
+				"linked_doc_type": "Journal Entry",
+				"linked_doc_name": jv.name,
+				"reply": (
+					f"✅ *تم إنشاء مسودة القيد بنجاح (بانتظار الاعتماد) 🧾*\n"
+					f"━━━━━━━━━━━━━━━━━━━\n"
+					f"🔖 *رقم القيد:* `{jv.name}`\n"
+					f"🏗️ *المشروع:* {project_name}\n"
+					f"💵 *المبلغ الصافي:* {tax_calc['net_amount']:,.2f} ر.س\n"
+					f"🏛️ *ضريبة القيمة المضافة (15%):* {tax_calc['tax_amount']:,.2f} ر.س\n"
+					f"💰 *المجموع الإجمالي:* {tax_calc['total_amount']:,.2f} ر.س\n"
+					f"👤 *المسجّل:* {sender_name or sender_phone}\n"
+					f"━━━━━━━━━━━━━━━━━━━\n"
+					f"🔗 *رابط مراجعة واعتماد القيد:*\n{doc_url}\n"
+					f"⚠️ *ملاحظة:* القيد تم حفظه كمسودة (Draft) ولا يؤثر على القوائم المالية حتى يتم اعتماده."
+				)
+			}
+
+		elif is_negation:
+			frappe.cache().delete_value(cache_key)
+			return {
+				"reply_source": "Accounting Tool",
+				"intent": "Expense Draft Cancelled",
+				"reply": "❌ تم إلغاء تسجيل المصروف بناءً على طلبك. كيف يمكنني مساعدتك؟"
+			}
+
+	return None
+
+
 def resolve_destination_jid(target: str) -> str:
 	"""
-	Resolves any recipient identifier (phone number or JID) to canonical delivery JID.
-	For 1-to-1 contacts, always delivers to {norm_phone}@s.whatsapp.net.
-	LID is strictly for contact tracking/auto-learning, NOT as the delivery stanza destination,
-	as direct LID stanzas break multi-device routing and trigger 'Waiting for this message'.
+	Resolves recipient identifier to canonical delivery JID.
+	For 1-to-1 contacts, ALWAYS delivers to {norm_phone}@s.whatsapp.net.
+	NEVER delivers to @lid because direct LID delivery triggers 'Waiting for this message'.
 	"""
 	clean = (target or "").strip()
 	if not clean:
@@ -418,7 +760,7 @@ def resolve_destination_jid(target: str) -> str:
 	if clean.endswith("@g.us"):
 		return clean
 
-	# If someone passed an explicit LID, try to resolve to phone number
+	# If someone passed an explicit LID, resolve back to phone number
 	if clean.endswith("@lid"):
 		clean_digits = clean.split("@")[0].split(":")[0]
 		try:
@@ -432,13 +774,27 @@ def resolve_destination_jid(target: str) -> str:
 					return f"{norm_p}@s.whatsapp.net"
 		except Exception:
 			pass
+		try:
+			log_p = frappe.db.sql("""
+				SELECT sender_phone FROM `tabElsaidy WhatsApp Log`
+				WHERE sender_lid LIKE %s AND sender_phone IS NOT NULL AND sender_phone != ''
+				ORDER BY creation DESC LIMIT 1
+			""", (f"%{clean_digits}%",), as_dict=True)
+			if log_p and log_p[0].get("sender_phone"):
+				norm_p = normalize_phone_number(log_p[0]["sender_phone"])
+				if norm_p:
+					return f"{norm_p}@s.whatsapp.net"
+		except Exception:
+			pass
+		frappe.logger("whatsapp").warn(f"[ResolveJID] Unresolvable LID destination: {clean}")
 		return clean
 
 	norm_phone = normalize_phone_number(clean)
-	if norm_phone:
-		return f"{norm_phone}@s.whatsapp.net"
+	if not norm_phone:
+		return clean if "@" in clean else f"{clean}@s.whatsapp.net"
 
-	return clean if "@" in clean else f"{clean}@s.whatsapp.net"
+	# For any phone number, ALWAYS deliver to {norm_phone}@s.whatsapp.net!
+	return f"{norm_phone}@s.whatsapp.net"
 
 
 @frappe.whitelist()
@@ -483,7 +839,7 @@ def send_baileys_reply(jid: str, text: str, quoted_msg_id: str = None) -> dict:
 		frappe.logger("whatsapp").warn(f"[SendBlocked] Refusing to reply to bot's own number: {clean_jid}")
 		return {"status": "ignored", "reason": "Cannot reply to bot itself"}
 
-	# Dynamic Outbound Identity Resolution (Auto-resolves to Cloud LID if available)
+	# Always resolve to canonical delivery JID ({phone}@s.whatsapp.net)
 	target_jid = resolve_destination_jid(clean_jid)
 
 	payload = {
@@ -495,7 +851,7 @@ def send_baileys_reply(jid: str, text: str, quoted_msg_id: str = None) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Core Webhook Endpoint
+# Core Webhook Event Receiver
 # ──────────────────────────────────────────────────────────────────────────────
 
 @frappe.whitelist(allow_guest=True)
@@ -505,10 +861,11 @@ def receive_baileys_event():
 	1. Real-time delivery status updates ('status_update' / 'messages.update').
 	2. Inbound messages ('message' / 'messages.upsert').
 	3. Dynamic Identity Resolution & Auto-Learning (LID <-> Phone).
-	4. Human Takeover Check (suppress bot auto-reply when human takeover active).
-	5. ZATCA Tax Engine Integration (strictly Draft docstatus=0).
-	6. Quoted WhatsApp response with ERPNext direct URL.
-	7. Logging into 'Elsaidy WhatsApp Log'.
+	4. Conversation State & Context Tracking ("أيوة" / "آه").
+	5. Accounting Tool: Real posted custody balance from approved GL Entries.
+	6. Interactive Expense Recording (Confirmation before Draft creation).
+	7. Gemini AI for Natural Greetings & General Inquiries.
+	8. Transparent Reply Source Logging: [Accounting Tool], [Gemini AI], [Fallback Template].
 	"""
 	start_time = time.time()
 	req = frappe.request
@@ -581,46 +938,28 @@ def receive_baileys_event():
 	sender_phone = normalize_phone_number(data.get("sender_phone") or "")
 	sender_name = data.get("push_name") or data.get("sender_name") or ""
 	text = (data.get("text") or "").strip()
-	has_media = bool(data.get("has_media"))
 	remote_jid = data.get("remote_jid") or ""
-	reply_jid = remote_jid or data.get("reply_jid") or (group_jid if is_group else (f"{sender_phone}@s.whatsapp.net" if sender_phone else sender_jid))
+	reply_jid = group_jid if is_group else (f"{sender_phone}@s.whatsapp.net" if sender_phone else (remote_jid or sender_jid))
 
-	# 2. Read Bot Mode & AI Settings
-	bot_mode = (hub.bot_mode if hub and hub.bot_mode else "AI + Accounting Hybrid")
-	enable_ai = cint(hub.enable_ai_reply if hub else 0)
-	ai_provider = (hub.ai_provider if hub and hub.ai_provider else "Gemini")
-	ai_api_key = None
-	if hub and enable_ai and hasattr(hub, "get_password"):
-		try:
-			ai_api_key = hub.get_password("ai_api_key", raise_exception=False) or None
-		except Exception:
-			ai_api_key = None
+	# 2. Strict Idempotency & Concurrency Lock Check
+	lock_key = f"wa_proc_{msg_id}"
+	try:
+		if not frappe.cache().set_value(lock_key, 1, expires_in_sec=60):
+			return {"status": "already_logged", "message_id": msg_id, "reason": "Concurrent processing"}
+	except Exception:
+		pass
 
-	ai_model = (hub.ai_model if hub and hub.ai_model else "gemini-2.5-flash")
-	ai_system_prompt = (
-		hub.ai_system_prompt
-		if hub and hub.ai_system_prompt
-		else "أنت المساعد الذكي لشركة الصعيدي للمقاولات."
-	)
-
-	# 3. Strict Idempotency Check (WA-{msg_id})
 	existing_log = frappe.db.get_value(
 		"Elsaidy WhatsApp Log",
 		{"message_id": msg_id},
 		["name", "status", "linked_document_type", "linked_document_name"],
 		as_dict=True
 	)
-	if existing_log:
-		if existing_log.status in ("Processed", "Replied"):
-			return {
-				"status": "already_processed",
-				"message_id": msg_id,
-				"linked_doc": f"{existing_log.linked_document_type} - {existing_log.linked_document_name}"
-			}
+	if existing_log and existing_log.status in ("Processed", "Replied"):
 		return {
-			"status": "already_logged",
+			"status": "already_processed",
 			"message_id": msg_id,
-			"current_status": existing_log.status
+			"linked_doc": f"{existing_log.linked_document_type} - {existing_log.linked_document_name}"
 		}
 
 	# Create Log Doc
@@ -637,11 +976,10 @@ def receive_baileys_event():
 	log_doc.status = "Received"
 	log_doc.delivery_status = "Delivered"
 
-	# 4. Access Control Verification & Dynamic Identity Resolution
+	# 3. Access Control Verification & Dynamic Contact Matching
 	target_project = None
-	target_cost_center = hub.default_cost_center if hub else None
-	target_custody_account = None
-	company = hub.default_company if (hub and hub.default_company) else "شركة ركن سبل الأفق للمقاولات"
+	target_cost_center = hub.default_cost_center if hub else "رئيسي - Rkn"
+	company = (hub.default_company if hub and hub.default_company else None) or "ركن سبل الافق"
 	contact_rule = None
 	group_rule = None
 
@@ -652,7 +990,6 @@ def receive_baileys_event():
 			log_doc.group_name = group_rule.group_name
 			target_project = group_rule.default_project
 			target_cost_center = group_rule.default_cost_center or target_cost_center
-			target_custody_account = group_rule.default_custody_account
 
 			if group_rule.require_mention:
 				bot_phone = hub.connected_phone or hub.bot_phone_number or ""
@@ -670,16 +1007,15 @@ def receive_baileys_event():
 				frappe.db.commit()
 				return {"status": "ignored", "reason": "Unregistered group"}
 	else:
-		# Dynamic Contact Matching without hardcoded rules
+		# Match Contact Rule
 		matching_contacts = []
 		if hub:
 			for c in hub.allowed_direct_contacts:
 				if not c.is_active:
 					continue
 				c_norm = normalize_phone_number(c.phone_number)
-				c_lid = getattr(c, "whatsapp_lid", "") or ""
+				c_lid = (getattr(c, "whatsapp_lid", "") or "").strip()
 
-				# 1. Match by WhatsApp Cloud LID
 				if c_lid and sender_lid and (c_lid in sender_lid or sender_lid in c_lid):
 					matching_contacts.append(c)
 					if not sender_phone and c_norm:
@@ -687,12 +1023,10 @@ def receive_baileys_event():
 						log_doc.sender_phone = sender_phone
 					break
 
-				# 2. Match by Normalized Phone
 				if sender_phone and c_norm == sender_phone:
 					matching_contacts.append(c)
 					break
 
-				# 3. Match by JID match
 				if sender_jid and (c_norm in sender_jid or (c.phone_number and c.phone_number in sender_jid)):
 					matching_contacts.append(c)
 					if not sender_phone and c_norm:
@@ -704,21 +1038,18 @@ def receive_baileys_event():
 			contact_rule = matching_contacts[0]
 			target_project = contact_rule.default_project
 			target_cost_center = contact_rule.default_cost_center or target_cost_center
-			target_custody_account = contact_rule.default_custody_account
 
-			# DYNAMIC AUTO-LEARNING: If contact matched by phone and contact rule has no LID, auto-save sender_lid!
+			# Dynamic Auto-Learning of sender_lid
 			c_lid = getattr(contact_rule, "whatsapp_lid", "") or ""
 			if sender_lid and not c_lid:
 				try:
 					frappe.db.set_value("Elsaidy WhatsApp Contact Rule", contact_rule.name, "whatsapp_lid", sender_lid, update_modified=False)
 					frappe.db.commit()
-					# Push mapping to Baileys engine
 					call_baileys_api("sync-contact-mapping", method="POST", data={
 						"mappings": [{"lid": sender_lid, "phone": normalize_phone_number(contact_rule.phone_number)}]
 					})
-				except Exception as map_err:
-					frappe.logger("whatsapp").warn(f"Failed to auto-save LID to contact rule: {map_err}")
-
+				except Exception:
+					pass
 		else:
 			if not (hub and hub.allow_unregistered_direct):
 				unregistered_msg = hub.unregistered_auto_reply if (hub and hub.unregistered_auto_reply) else (
@@ -734,7 +1065,7 @@ def receive_baileys_event():
 				frappe.db.commit()
 				return {"status": "rejected", "reason": "Unregistered contact"}
 
-	# ── 4.1 Check Human Takeover Active ───────────────────────────────────────
+	# ── 4. Check Human Takeover Active ───────────────────────────────────────
 	is_takeover = False
 	if sender_phone:
 		try:
@@ -743,7 +1074,7 @@ def receive_baileys_event():
 			is_takeover = False
 
 	if is_takeover:
-		log_doc.extracted_intent = "Human Takeover Active"
+		log_doc.extracted_intent = "[Human Takeover] Auto-reply Suppressed"
 		log_doc.status = "Received"
 		log_doc.reply_text = None
 		log_doc.insert(ignore_permissions=True)
@@ -756,161 +1087,157 @@ def receive_baileys_event():
 			"message": "Message logged. Automated reply suppressed (Human takeover mode active)."
 		}
 
-	# ── 5. Intent Detection & Routing ─────────────────────────────────────────
-	reply_content = None
-	created_doc = None
-
+	# ── 5. Bot Mode Check ────────────────────────────────────────────────────
+	bot_mode = (hub.bot_mode if hub and hub.bot_mode else "AI + Accounting Hybrid")
 	if bot_mode == "Disabled / Log Only":
-		log_doc.extracted_intent = "Disabled Mode - Log Only"
+		log_doc.extracted_intent = "[Disabled Mode] Log Only"
 		log_doc.status = "Ignored"
 		log_doc.insert(ignore_permissions=True)
 		frappe.db.commit()
 		return {"status": "ok", "message_id": msg_id, "log": log_doc.name, "mode": "disabled"}
 
-	parsed_expense = parse_expense_from_text(text)
+	reply_content = None
+	created_doc = None
+	reply_source = "Unknown"
+	intent_name = "General"
 
-	# ZATCA Expense Path
-	if parsed_expense and bot_mode != "AI Assistant Only":
-		log_doc.extracted_intent = "Expense Record"
+	norm_text = text.strip().lower()
 
-		if contact_rule and not contact_rule.can_record_expenses:
-			reply_content = "⛔ ليس لديك صلاحية تسجيل المصاريف عبر واتساب من هذا الرقم."
-		else:
+	# ── 6. Conversation State & Context Engine (Affirmations / Negations) ────
+	context_res = handle_conversation_context(
+		text=text,
+		sender_phone=sender_phone,
+		sender_name=sender_name,
+		contact_rule=contact_rule,
+		hub=hub
+	)
+	if context_res:
+		reply_content = context_res.get("reply")
+		reply_source = context_res.get("reply_source", "Accounting Tool")
+		intent_name = context_res.get("intent", "Context Handled")
+		if context_res.get("linked_doc_name"):
+			log_doc.linked_document_type = context_res.get("linked_doc_type", "Journal Entry")
+			log_doc.linked_document_name = context_res.get("linked_doc_name")
+			log_doc.status = "Processed"
+
+	# ── 7. Custody Balance Query (Accounting Tool) ───────────────────────────
+	if not reply_content:
+		balance_keywords = [
+			"رصيد", "الرصيد", "رصيد العهدة", "رصيد العهده", "رصيدي", "كم باقي",
+			"فاضل كام", "متبقي كام", "كشف حساب", "تسوية العهدة", "تسوية عهدة",
+			"كشف العهدة", "رصيد عهدة", "رصيد سلف", "كم في العهدة", "كم في العهده"
+		]
+		is_balance_query = any(kw in norm_text for kw in balance_keywords)
+		
+		# Ensure not an expense command (e.g. "صرفت من العهدة 300")
+		is_expense_syntax = any(kw in norm_text for kw in ["صرف", "دفع", "اشتريت", "شراء", "فاتورة"]) and re.search(r"\d+", norm_text)
+
+		if is_balance_query and not is_expense_syntax:
+			bal_res = query_employee_custody_balance(sender_phone=sender_phone, sender_lid=sender_lid)
+			reply_content = bal_res.get("reply")
+			reply_source = bal_res.get("reply_source", "Accounting Tool")
+			intent_name = bal_res.get("intent", "Custody Balance Query")
+
+	# ── 8. Expense Registration & Interactive Confirmation ───────────────────
+	if not reply_content and bot_mode != "AI Assistant Only":
+		expense_res = process_expense_interactive(
+			text=text,
+			sender_phone=sender_phone,
+			sender_name=sender_name,
+			contact_rule=contact_rule,
+			hub=hub
+		)
+		if expense_res:
+			reply_content = expense_res.get("reply")
+			reply_source = expense_res.get("reply_source", "Accounting Tool")
+			intent_name = expense_res.get("intent", "Expense Confirmation Request")
+
+	# ── 9. Explicit Help / Start Over Request ────────────────────────────────
+	if not reply_content:
+		help_keywords = ["مساعدة", "مساعده", "تعليمات", "ابدأ من جديد", "ابدا من جديد", "البداية", "البدايه", "القائمة", "القائمه", "اوامر", "أوامر", "help", "start", "menu"]
+		if any(kw in norm_text for kw in help_keywords):
+			reply_content = generate_local_fallback_reply(text)
+			reply_source = "Fallback Template"
+			intent_name = "Help Menu"
+
+	# ── 10. Gemini AI: Natural Greetings & General Questions ─────────────────
+	if not reply_content:
+		enable_ai = cint(hub.enable_ai_reply if hub else 0)
+		ai_provider = (hub.ai_provider if hub and hub.ai_provider else "Gemini")
+		ai_api_key = None
+		if hub and hasattr(hub, "get_password"):
 			try:
-				from hagag_erp.tax_engine import (
-					calculate_zatca_tax,
-					create_draft_journal_entry,
-					get_company_tax_accounts
-				)
+				ai_api_key = hub.get_password("ai_api_key", raise_exception=False) or None
+			except Exception:
+				ai_api_key = None
 
-				amount = parsed_expense["amount"]
-				is_inclusive = parsed_expense["is_inclusive"]
-				tax_calc = calculate_zatca_tax(amount, is_inclusive=is_inclusive)
+		ai_model = (hub.ai_model if hub and hub.ai_model else "Gemini 3.5 Flash Lite")
+		ai_system_prompt = (
+			hub.ai_system_prompt
+			if hub and hub.ai_system_prompt
+			else "أنت المساعد المالي والإداري لمنظومة الصعيدي للمقاولات (شركة ركن سبل الأفق للمقاولات، شركة الجابري، Byte Zone). أجب بأسلوب ترحيبي مهني، مباشر، وموجز باللغة العربية دون استبدال الاستفسارات المحاسبية بقوائم ثابتة."
+		)
 
-				tax_accs = get_company_tax_accounts(company)
-				expense_account = (hub.default_expense_account if hub and hub.default_expense_account else None) or tax_accs.get("default_expense_account")
-				vat_account = (hub.default_vat_account if hub and hub.default_vat_account else None) or tax_accs.get("input_vat_account")
-				credit_account = target_custody_account or tax_accs.get("default_cash_account")
-
-				if not expense_account:
-					expense_account = frappe.db.get_value("Account", {"company": company, "root_type": "Expense", "is_group": 0}, "name")
-				if not vat_account:
-					vat_account = frappe.db.get_value("Account", {"company": company, "account_type": "Tax", "is_group": 0}, "name")
-				if not credit_account:
-					credit_account = frappe.db.get_value("Account", {"company": company, "account_type": "Cash", "is_group": 0}, "name")
-
-				if not (expense_account and vat_account and credit_account):
-					raise ValueError("لم يتم تهيئة الحسابات المحاسبية المطلوبة (مصاريف/ضريبة/صندوق) بعد.")
-
-				# Create Draft Journal Entry (docstatus=0 strictly)
-				je_lines = [
-					{
-						"account": expense_account,
-						"debit": float(tax_calc["net_amount"]),
-						"credit": 0.0,
-						"project": target_project,
-						"cost_center": target_cost_center,
-						"user_remark": f"مصروف عبر واتساب: {text[:140]}"
-					},
-					{
-						"account": vat_account,
-						"debit": float(tax_calc["tax_amount"]),
-						"credit": 0.0,
-						"project": target_project,
-						"cost_center": target_cost_center,
-						"user_remark": f"ضريبة القيمة المضافة 15% ZATCA: {text[:140]}"
-					},
-					{
-						"account": credit_account,
-						"debit": 0.0,
-						"credit": float(tax_calc["total_amount"]),
-						"project": target_project,
-						"cost_center": target_cost_center,
-						"user_remark": f"دفعة من صندوق/عهدة: {sender_name or sender_phone}"
-					}
-				]
-
-				user_remark = f"مصروف عبر واتساب من Elsaidy WhatsApp Hub من {sender_name} ({sender_phone}).\nالرسالة الأصلية: {text}"
-				jv = create_draft_journal_entry(
-					company=company,
-					accounts_data=je_lines,
-					user_remark=user_remark,
-					reference_id=f"WA-{msg_id}"
-				)
-
-				created_doc = jv
-				log_doc.linked_document_type = "Journal Entry"
-				log_doc.linked_document_name = jv.name
-				log_doc.status = "Processed"
-
-				doc_url = f"https://erp.elsaidy.org/app/journal-entry/{jv.name}"
-				project_name = frappe.db.get_value("Project", target_project, "project_name") if target_project else "عام"
-
-				reply_content = (
-					f"✅ *تم تسجيل المصروف بنجاح (مسودة) ✅*\n"
-					f"━━━━━━━━━━━━━━━━━━━\n"
-					f"🔖 *رقم القيد:* `{jv.name}`\n"
-					f"🏗️ *المشروع:* {project_name}\n"
-					f"💵 *المبلغ الصافي:* {tax_calc['net_amount']:,.2f} ر.س\n"
-					f"🏛️ *ضريبة القيمة المضافة (15%):* {tax_calc['tax_amount']:,.2f} ر.س\n"
-					f"💰 *المجموع الإجمالي:* {tax_calc['total_amount']:,.2f} ر.س\n"
-					f"👤 *المسجّل / العهدة:* {sender_name or sender_phone}\n"
-					f"━━━━━━━━━━━━━━━━━━━\n"
-					f"🔗 *رابط المستند للاعتماد:*\n{doc_url}"
-				)
-
-			except Exception as je_exc:
-				frappe.log_error(f"WhatsApp Expense Creation Error: {str(je_exc)}", "Elsaidy WhatsApp Hub")
-				log_doc.error_message = str(je_exc)
-				log_doc.status = "Failed"
-				reply_content = f"⚠️ حدث خطأ في تسجيل المصروف: {str(je_exc)}"
-
-	# AI Reply Path
-	elif enable_ai and ai_api_key and bot_mode != "Accounting Commands Only":
-		log_doc.extracted_intent = "AI Chat Reply"
+		# Fetch recent conversation context for contextual replies (e.g. "آه")
+		context_history = []
 		try:
-			reply_content = call_ai_api(
+			last_logs = frappe.db.sql("""
+				SELECT direction, message_text, reply_text
+				FROM `tabElsaidy WhatsApp Log`
+				WHERE (sender_phone = %s OR receiver_phone = %s)
+				ORDER BY creation DESC
+				LIMIT 2
+			""", (sender_phone, sender_phone), as_dict=True)
+			if last_logs:
+				for l in reversed(last_logs):
+					if l.get("message_text"):
+						context_history.append({"user": l["message_text"]})
+					if l.get("reply_text"):
+						context_history.append({"model": l["reply_text"]})
+		except Exception:
+			pass
+
+		# Greetings detection
+		greeting_words = ["مساء الفل", "مساء الخير", "صباح الخير", "السلام عليكم", "مرحبا", "مرحباً", "أهلاً", "اهلا", "سلام عليكم", "هاي", "hello", "hi"]
+		is_greeting = any(gw in norm_text for gw in greeting_words)
+
+		if enable_ai and ai_api_key and bot_mode != "Accounting Commands Only":
+			ai_res = call_ai_api(
 				user_message=text,
 				provider=ai_provider,
 				api_key=ai_api_key,
 				model=ai_model,
-				system_prompt=ai_system_prompt
+				system_prompt=ai_system_prompt,
+				context_history=context_history
 			)
-			log_doc.status = "Processed"
-		except Exception as ai_err:
-			frappe.log_error(f"AI Reply Error: {str(ai_err)}", "Elsaidy WhatsApp Hub")
-			log_doc.status = "Failed"
-			reply_content = generate_local_fallback_reply(text, str(ai_err))
-
-	# Balance Inquiry or Generic Help Path
-	else:
-		log_doc.extracted_intent = "Inquiry / Chat"
-		inquiry_keywords = ["رصيد", "الرصيد", "الميزانية", "ميزان", "كم في"]
-		is_inquiry = any(kw in text for kw in inquiry_keywords)
-
-		if is_inquiry and (not contact_rule or contact_rule.can_request_balance):
-			if target_custody_account:
-				balance = frappe.db.sql("""
-					SELECT SUM(debit - credit) as balance
-					FROM `tabGL Entry`
-					WHERE account = %s AND is_cancelled = 0
-				""", (target_custody_account,), as_dict=True)
-				current_bal = flt(balance[0].balance) if balance and balance[0].balance else 0.0
-				reply_content = (
-					f"💰 *استعلام رصيد العهدة*\n"
-					f"━━━━━━━━━━━━━━━━━━━\n"
-					f"👤 *الاسم:* {sender_name or (contact_rule.contact_name if contact_rule else sender_phone)}\n"
-					f"🏦 *حساب العهدة:* {target_custody_account}\n"
-					f"💵 *الرصيد الحالي المتاح:* {current_bal:,.2f} ر.س\n"
-					f"━━━━━━━━━━━━━━━━━━━\n"
-					f"نظام Elsaidy ERP - دقيق وموثوق وآمن"
-				)
+			if ai_res.get("status") == "ok":
+				reply_content = ai_res.get("reply")
+				reply_source = "Gemini AI"
+				intent_name = "Natural Greeting" if is_greeting else "General Inquiry"
 			else:
-				reply_content = "لا يوجد حساب عهدة مرتبط برقمك. تواصل مع المحاسب لإعداد الحساب."
+				# Log error clearly and return polite error without silent menu
+				err_msg = ai_res.get("error", "فشل الاتصال بالذكاء الاصطناعي")
+				reply_content = (
+					f"⚠️ أواجه صعوبة مؤقتة في معالجة طلبك عبر الذكاء الاصطناعي.\n"
+					f"يمكنك استخدام الأوامر المباشرة:\n"
+					f"• *رصيد العهدة* — للاستعلام المالي المباشر.\n"
+					f"• *صرفت [المبلغ] ريال [البيان]* — لتسجيل مصروف جديد."
+				)
+				reply_source = "Gemini AI Error"
+				intent_name = "AI Connection Error"
+				log_doc.error_message = err_msg
 		else:
-			reply_content = generate_local_fallback_reply(text)
+			# Fallback when AI is disabled
+			if is_greeting:
+				reply_content = "أهلاً بك يا أستاذ علي! كيف يمكنني مساعدتك في مهامك المالية أو الإدارية اليوم؟"
+				reply_source = "Fallback Template"
+				intent_name = "Natural Greeting"
+			else:
+				reply_content = generate_local_fallback_reply(text)
+				reply_source = "Fallback Template"
+				intent_name = "Fallback Menu"
 
-	# 6. Send Quoted WhatsApp Reply
+	# ── 11. Dispatch WhatsApp Reply ──────────────────────────────────────────
 	if reply_content and hub and hub.auto_reply_enabled:
 		try:
 			send_baileys_reply(reply_jid, reply_content, quoted_msg_id=msg_id)
@@ -918,19 +1245,26 @@ def receive_baileys_event():
 			log_doc.delivery_status = "Sent"
 		except Exception as reply_err:
 			frappe.log_error(f"WhatsApp Reply Send Error: {str(reply_err)}", "Elsaidy WhatsApp Hub")
+			log_doc.error_message = str(reply_err)
 
-	# 7. Save Log
+	# ── 12. Save & Audit Log ─────────────────────────────────────────────────
 	elapsed_ms = (time.time() - start_time) * 1000.0
 	log_doc.reply_text = reply_content
+	log_doc.extracted_intent = f"[{reply_source}] {intent_name}"
 	log_doc.execution_time_ms = round(elapsed_ms, 2)
 	log_doc.insert(ignore_permissions=True)
 	frappe.db.commit()
+
+	frappe.logger("whatsapp").info(
+		f"[InboundProcessed] msg_id={msg_id} phone={sender_phone} source=[{reply_source}] intent={intent_name} time={log_doc.execution_time_ms}ms"
+	)
 
 	return {
 		"status": "ok",
 		"message_id": msg_id,
 		"log": log_doc.name,
-		"linked_doc": created_doc.name if created_doc else None,
+		"reply_source": reply_source,
+		"intent": intent_name,
 		"execution_time_ms": log_doc.execution_time_ms
 	}
 
@@ -951,15 +1285,14 @@ def get_dashboard_telemetry() -> dict:
 
 	today_date = today()
 
-	# DB Metrics for today
 	try:
 		stats = frappe.db.sql("""
 			SELECT 
 				COUNT(*) as total_today,
 				SUM(CASE WHEN direction = 'Incoming' THEN 1 ELSE 0 END) as incoming_today,
 				SUM(CASE WHEN status = 'Replied' THEN 1 ELSE 0 END) as replied_today,
-				SUM(CASE WHEN extracted_intent = 'AI Chat Reply' THEN 1 ELSE 0 END) as ai_replies_today,
-				SUM(CASE WHEN extracted_intent = 'Expense Record' AND status = 'Processed' THEN 1 ELSE 0 END) as expenses_today,
+				SUM(CASE WHEN extracted_intent LIKE '%%AI%%' THEN 1 ELSE 0 END) as ai_replies_today,
+				SUM(CASE WHEN extracted_intent LIKE '%%Accounting%%' THEN 1 ELSE 0 END) as accounting_today,
 				SUM(CASE WHEN status = 'Failed' THEN 1 ELSE 0 END) as failed_today
 			FROM `tabElsaidy WhatsApp Log`
 			WHERE DATE(creation) = %s
@@ -972,7 +1305,6 @@ def get_dashboard_telemetry() -> dict:
 	connected_phone = health_data.get("phone") or status_data.get("bot_phone") or (hub.connected_phone if hub else None)
 	engine_state = health_data.get("engine_state") or status_data.get("engine_state") or ("CONNECTED" if is_connected else "DISCONNECTED")
 
-	# Safe auto-sync Hub state only when change is detected
 	new_db_status = "Connected" if is_connected else ("Connecting" if engine_state == "CONNECTING" else "Disconnected")
 	if hub and (hub.connection_status != new_db_status or (connected_phone and hub.connected_phone != connected_phone)):
 		try:
@@ -999,7 +1331,7 @@ def get_dashboard_telemetry() -> dict:
 			"incoming": cint(db_metrics.get("incoming_today", 0)),
 			"replied": cint(db_metrics.get("replied_today", 0)),
 			"ai_replies": cint(db_metrics.get("ai_replies_today", 0)),
-			"expenses_processed": cint(db_metrics.get("expenses_today", 0)),
+			"accounting_processed": cint(db_metrics.get("accounting_today", 0)),
 			"failed": cint(db_metrics.get("failed_today", 0))
 		}
 	}
@@ -1165,23 +1497,20 @@ def send_conversation_reply(target_id: str, message: str, quoted_msg_id: str = N
 	res = call_baileys_api("send-message", method="POST", data=payload)
 	
 	if res.get("status") == "ok":
-		out_msg_id = res.get("msg_id") or f"HUB-OUT-{frappe.generate_hash(length=8)}"
-		if not frappe.db.exists("Elsaidy WhatsApp Log", {"message_id": out_msg_id}):
-			log_doc = frappe.new_doc("Elsaidy WhatsApp Log")
-			log_doc.message_id = out_msg_id
-			log_doc.direction = "Outgoing"
-			log_doc.sender_phone = bot_phone
-			log_doc.receiver_phone = norm_target
-			log_doc.receiver_jid = jid
-			log_doc.reply_jid = jid
-			log_doc.message_text = text
-			log_doc.status = "Replied"
-			log_doc.delivery_status = "Sent"
-			log_doc.extracted_intent = "Human Direct Reply"
-			log_doc.insert(ignore_permissions=True)
-			frappe.db.commit()
-			return {"status": "ok", "msg_id": out_msg_id, "log": log_doc.name}
-		return {"status": "ok", "msg_id": out_msg_id}
+		log_doc = frappe.new_doc("Elsaidy WhatsApp Log")
+		log_doc.message_id = res.get("msg_id") or f"HUB-OUT-{frappe.generate_hash(length=8)}"
+		log_doc.direction = "Outgoing"
+		log_doc.sender_phone = bot_phone
+		log_doc.receiver_phone = norm_target
+		log_doc.receiver_jid = jid
+		log_doc.reply_jid = jid
+		log_doc.message_text = text
+		log_doc.status = "Replied"
+		log_doc.delivery_status = "Sent"
+		log_doc.extracted_intent = "[Human Direct Reply]"
+		log_doc.insert(ignore_permissions=True)
+		frappe.db.commit()
+		return {"status": "ok", "msg_id": log_doc.message_id, "log": log_doc.name}
 	
 	return res
 
@@ -1228,7 +1557,7 @@ def test_ai_configuration(prompt: str = None) -> dict:
 	
 	hub = get_hub_settings()
 	provider = hub.ai_provider if hub else "Gemini"
-	model = hub.ai_model if hub else "gemini-2.5-flash"
+	model = hub.ai_model if hub else "Gemini 3.5 Flash Lite"
 	test_prompt = prompt or "السلام عليكم، ما هي الخدمات والمشاريع التي تقدمها شركة الصعيدي؟"
 	
 	ai_api_key = None
@@ -1241,7 +1570,7 @@ def test_ai_configuration(prompt: str = None) -> dict:
 	system_prompt = hub.ai_system_prompt if hub else "أنت المساعد الذكي لشركة الصعيدي للمقاولات."
 	
 	t0 = time.time()
-	reply = call_ai_api(
+	res = call_ai_api(
 		user_message=test_prompt,
 		provider=provider,
 		api_key=ai_api_key,
@@ -1251,11 +1580,11 @@ def test_ai_configuration(prompt: str = None) -> dict:
 	latency_ms = round((time.time() - t0) * 1000.0, 2)
 	
 	return {
-		"status": "ok",
+		"status": res.get("status", "ok"),
 		"provider": provider,
 		"model": model,
 		"prompt": test_prompt,
-		"reply": reply,
+		"reply": res.get("reply") or res.get("error"),
 		"latency_ms": latency_ms,
 		"has_api_key": bool(ai_api_key)
 	}
@@ -1270,7 +1599,6 @@ def get_system_health_report() -> dict:
 	baileys_health = call_baileys_api("health", method="GET", hub_doc=hub)
 	baileys_status = call_baileys_api("status", method="GET", hub_doc=hub)
 	
-	# DB checks
 	try:
 		db_ok = True
 		log_count = frappe.db.count("Elsaidy WhatsApp Log")
@@ -1306,7 +1634,7 @@ def get_system_health_report() -> dict:
 			"auto_reply_enabled": bool(hub.auto_reply_enabled if hub else False),
 			"enable_ai_reply": bool(hub.enable_ai_reply if hub else False),
 			"ai_provider": hub.ai_provider if hub else "Gemini",
-			"ai_model": hub.ai_model if hub else "gemini-2.5-flash"
+			"ai_model": hub.ai_model if hub else "Gemini 3.5 Flash Lite"
 		}
 	}
 
@@ -1394,104 +1722,121 @@ def send_test_whatsapp_message(recipient: str, message: str) -> dict:
 
 	# Record in Elsaidy WhatsApp Log as Outgoing
 	if res.get("status") == "ok":
-		out_msg_id = res.get("msg_id") or f"TEST-{frappe.generate_hash(length=8)}"
-		if not frappe.db.exists("Elsaidy WhatsApp Log", {"message_id": out_msg_id}):
-			log_doc = frappe.new_doc("Elsaidy WhatsApp Log")
-			log_doc.message_id = out_msg_id
-			log_doc.direction = "Outgoing"
-			log_doc.sender_phone = bot_phone
-			log_doc.receiver_phone = norm_recipient
-			log_doc.receiver_jid = jid
-			log_doc.reply_jid = jid
-			log_doc.message_text = message
-			log_doc.status = "Replied"
-			log_doc.delivery_status = "Sent"
-			log_doc.extracted_intent = "Manual Test Message"
-			log_doc.insert(ignore_permissions=True)
-			frappe.db.commit()
+		log_doc = frappe.new_doc("Elsaidy WhatsApp Log")
+		log_doc.message_id = res.get("msg_id") or f"TEST-{frappe.generate_hash(length=8)}"
+		log_doc.direction = "Outgoing"
+		log_doc.sender_phone = bot_phone
+		log_doc.receiver_phone = norm_recipient
+		log_doc.receiver_jid = jid
+		log_doc.reply_jid = jid
+		log_doc.message_text = message
+		log_doc.status = "Replied"
+		log_doc.delivery_status = "Sent"
+		log_doc.extracted_intent = "[Manual Test Message]"
+		log_doc.insert(ignore_permissions=True)
+		frappe.db.commit()
 
 	return res
 
 
 @frappe.whitelist()
-def simulate_whatsapp_message(text: str, sender_phone: str = "966569589664") -> dict:
+def simulate_whatsapp_message(text: str, sender_phone: str = "201028632620") -> dict:
 	"""
-	AI & Natural Language Simulator (Dry Run Mode).
-	Evaluates a message across all five Elsaidy ERP accounting & custody intents
-	without committing any documents to the database.
+	Interactive Simulator testing the full Elsaidy WhatsApp auto-reply pipeline.
+	Returns detected intent, real reply source, and formatted preview.
 	"""
 	clean_text = (text or "").strip()
 	if not clean_text:
 		return {"status": "error", "message": "نص الرسالة مطلوب للمحاكاة"}
 
-	# 1. Check Accounting & Custody Intents First (Intents A, B, C, D, E)
-	from hagag_erp.custody_service import (
-		simulate_custody_workflow,
-		classify_accounting_intent
-	)
-
-	parsed_intent = classify_accounting_intent(clean_text)
-	if parsed_intent and parsed_intent.get("intent"):
-		sim_res = simulate_custody_workflow(
-			text=clean_text,
-			sender_phone=sender_phone,
-			user_id=frappe.session.user
-		)
-		if sim_res.get("status") == "success":
-			return {
-				"status": "ok",
-				"mode": "Dry Run Simulation",
-				"detected_intent": sim_res.get("intent_name"),
-				"intent_code": sim_res.get("intent"),
-				"employee_id": sim_res.get("employee_id"),
-				"employee_name": sim_res.get("employee_name"),
-				"verified_identity_source": sim_res.get("verified_identity_source"),
-				"payment_method": sim_res.get("payment_method"),
-				"selected_accounts": sim_res.get("selected_accounts"),
-				"vat_classification": sim_res.get("vat_classification"),
-				"proposed_document_type": sim_res.get("proposed_document_type"),
-				"simulated_lines": sim_res.get("proposed_lines"),
-				"actual_live_posted_balance": sim_res.get("actual_live_posted_balance"),
-				"simulated_post_approval_impact": sim_res.get("simulated_post_approval_impact"),
-				"simulated_reply": sim_res.get("formatted_preview") or sim_res.get("summary_text"),
-				"explanation": sim_res.get("explanation")
-			}
-
-	# 2. Fallback to AI Assistant for general inquiries
 	hub = get_hub_settings()
-	bot_mode = (hub.bot_mode if hub and hub.bot_mode else "AI + Accounting Hybrid")
-	enable_ai = cint(hub.enable_ai_reply if hub else 0)
-	ai_provider = (hub.ai_provider if hub and hub.ai_provider else "Gemini")
-	ai_model = (hub.ai_model if hub and hub.ai_model else "gemini-2.5-flash")
+	norm_phone = normalize_phone_number(sender_phone)
 
-	ai_api_key = None
-	if hub and hasattr(hub, "get_password"):
-		try:
-			ai_api_key = hub.get_password("ai_api_key", raise_exception=False) or None
-		except Exception:
-			ai_api_key = None
+	# Find contact rule
+	rules = frappe.db.sql("""
+		SELECT * FROM `tabElsaidy WhatsApp Contact Rule`
+		WHERE is_active = 1
+		  AND (phone_number = %s OR phone_number LIKE %s)
+		LIMIT 1
+	""", (norm_phone, f"%{norm_phone[-9:]}"), as_dict=True)
+	contact_rule = rules[0] if rules else None
 
-	ai_system_prompt = hub.ai_system_prompt if hub else "أنت المساعد المالي لمنظومة الصعيدي."
+	sender_name = (contact_rule.get("contact_name") if contact_rule else None) or "علي الصعيدي"
 
-	if enable_ai and ai_api_key and bot_mode != "Accounting Commands Only":
-		simulated_ai_reply = call_ai_api(
-			user_message=clean_text,
-			provider=ai_provider,
-			api_key=ai_api_key,
-			model=ai_model,
-			system_prompt=ai_system_prompt
-		)
+	# 1. Check conversation context
+	context_res = handle_conversation_context(
+		text=clean_text,
+		sender_phone=norm_phone,
+		sender_name=sender_name,
+		contact_rule=contact_rule,
+		hub=hub
+	)
+	if context_res:
 		return {
 			"status": "ok",
-			"mode": "Dry Run Simulation",
-			"detected_intent": f"AI Chat ({ai_provider} - {ai_model})",
-			"parsed_entities": {},
-			"simulated_reply": simulated_ai_reply
+			"mode": "Simulation",
+			"reply_source": context_res.get("reply_source"),
+			"detected_intent": context_res.get("intent"),
+			"simulated_reply": context_res.get("reply")
 		}
+
+	# 2. Check balance query
+	norm_clean = clean_text.lower()
+	balance_keywords = ["رصيد", "الرصيد", "كم باقي", "فاضل كام", "متبقي كام", "كشف حساب", "تسوية العهدة", "كشف العهدة"]
+	is_balance_query = any(kw in norm_clean for kw in balance_keywords)
+	is_expense_syntax = any(kw in norm_clean for kw in ["صرف", "دفع", "اشتريت", "شراء", "فاتورة"]) and re.search(r"\d+", norm_clean)
+
+	if is_balance_query and not is_expense_syntax:
+		bal_res = query_employee_custody_balance(sender_phone=norm_phone)
+		return {
+			"status": "ok",
+			"mode": "Simulation",
+			"reply_source": bal_res.get("reply_source"),
+			"detected_intent": bal_res.get("intent"),
+			"simulated_reply": bal_res.get("reply")
+		}
+
+	# 3. Check interactive expense
+	expense_res = process_expense_interactive(
+		text=clean_text,
+		sender_phone=norm_phone,
+		sender_name=sender_name,
+		contact_rule=contact_rule,
+		hub=hub
+	)
+	if expense_res:
+		return {
+			"status": "ok",
+			"mode": "Simulation",
+			"reply_source": expense_res.get("reply_source"),
+			"detected_intent": expense_res.get("intent"),
+			"simulated_reply": expense_res.get("reply")
+		}
+
+	# 4. Check Gemini AI
+	enable_ai = cint(hub.enable_ai_reply if hub else 0)
+	ai_api_key = hub.get_password("ai_api_key", raise_exception=False) if (hub and hasattr(hub, "get_password")) else None
+	if enable_ai and ai_api_key:
+		ai_res = call_ai_api(
+			user_message=clean_text,
+			provider="Gemini",
+			api_key=ai_api_key,
+			model=hub.ai_model if hub else "Gemini 3.5 Flash Lite",
+			system_prompt=hub.ai_system_prompt if hub else None
+		)
+		if ai_res.get("status") == "ok":
+			return {
+				"status": "ok",
+				"mode": "Simulation",
+				"reply_source": "Gemini AI",
+				"detected_intent": "General Inquiry",
+				"simulated_reply": ai_res.get("reply")
+			}
 
 	return {
 		"status": "ok",
-		"mode": "Dry Run Simulation",
-		"detected_intent": "General Message",
+		"mode": "Simulation",
+		"reply_source": "Fallback Template",
+		"detected_intent": "Help Menu",
 		"simulated_reply": generate_local_fallback_reply(clean_text)
 	}

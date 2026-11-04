@@ -34,9 +34,9 @@ from hagag_erp.tax_engine import (
 
 # Known bot phone numbers that MUST NEVER be mapped to employees
 KNOWN_BOT_PHONES = {
-    "201028632620",
-    "+201028632620",
-    "00201028632620"
+    "966569589664",
+    "+966569589664",
+    "00966569589664"
 }
 
 # Arabic digits mapping
@@ -779,18 +779,17 @@ def simulate_custody_workflow(
         else:
             vat_info = {"status": "مستبعدة من الاسترداد", "account": None, "amount": 0.0}
 
-        # IMPORTANT: If custody_account is Cash (1120), party_type MUST BE NONE!
-        # ERPNext v16 strictly rejects party_type on Cash accounts.
+        # Custody Account (1120) with Party Type = Employee
         simulated_lines.append({
             "account": custody_account,
-            "party_type": None,
-            "party": None,
+            "party_type": "Employee" if employee_id else None,
+            "party": employee_id,
             "debit": 0.0,
             "credit": float(gross_total),
             "remark": f"تسوية عهدة الموظف: {employee_name} ({employee_id})" if employee_id else "تسوية عهدة نقدية"
         })
 
-        explanation = f"تسوية مصروف عهدة بقيمة {float(gross_total):,.2f} ريال لحساب الموظف {employee_name or employee_id}، مع قيد دائن على حساب العهد {custody_account} دون إجبار طرف على حساب النقد."
+        explanation = f"تسوية مصروف عهدة بقيمة {float(gross_total):,.2f} ريال لحساب الموظف {employee_name or employee_id}، مع قيد دائن على حساب العهد {custody_account} بربط الموظف كطرف (Employee Party)."
         post_approval_impact = {
             "custody_balance_decrease": float(gross_total),
             "expense_increase": float(net_exp),
@@ -807,11 +806,11 @@ def simulate_custody_workflow(
         source_account, source_type = get_verified_payment_account(payment_method, comp_name)
         gross_total = round_currency(amount)
 
-        # Debit: Custody Account (1120)
+        # Debit: Custody Account (1120) with Party Type = Employee
         simulated_lines.append({
             "account": custody_account,
-            "party_type": None,
-            "party": None,
+            "party_type": "Employee" if employee_id else None,
+            "party": employee_id,
             "debit": float(gross_total),
             "credit": 0.0,
             "remark": f"تغذية عهدة نقدية للموظف: {employee_name} ({employee_id})" if employee_id else "تغذية عهدة نقدية"
@@ -989,14 +988,21 @@ def get_employee_live_gl_balance(employee: str = None, company: str = None) -> d
         "unposted_draft_advances": 0.0
     }
 
-    # 1. Posted GL Entries for Custody Account (1120)
-    # Notice: 1120 has no party_type. So we check user_remark or GL Entries for 1120
+    # 1. Posted GL Entries for Custody Account (1120) with Party Type = Employee
     if frappe.db.exists("Account", custody_account):
-        gl_rows = frappe.db.sql("""
-            SELECT SUM(debit) as total_debit, SUM(credit) as total_credit, COUNT(name) as count
-            FROM `tabGL Entry`
-            WHERE account = %s AND company = %s AND is_cancelled = 0
-        """, (custody_account, comp_name), as_dict=True)
+        if employee:
+            gl_rows = frappe.db.sql("""
+                SELECT SUM(debit) as total_debit, SUM(credit) as total_credit, COUNT(name) as count
+                FROM `tabGL Entry`
+                WHERE account = %s AND company = %s AND is_cancelled = 0
+                  AND ((party_type = 'Employee' AND party = %s) OR (party IS NULL AND remarks LIKE %s))
+            """, (custody_account, comp_name, employee, f"%{employee}%"), as_dict=True)
+        else:
+            gl_rows = frappe.db.sql("""
+                SELECT SUM(debit) as total_debit, SUM(credit) as total_credit, COUNT(name) as count
+                FROM `tabGL Entry`
+                WHERE account = %s AND company = %s AND is_cancelled = 0
+            """, (custody_account, comp_name), as_dict=True)
         if gl_rows and gl_rows[0].get("total_debit") is not None:
             dr = flt(gl_rows[0].total_debit)
             cr = flt(gl_rows[0].total_credit)
@@ -1591,7 +1597,11 @@ def send_custody_whatsapp_notification(
                 log_doc.linked_document_type = doctype
                 log_doc.linked_document_name = docname
                 log_doc.insert(ignore_permissions=True)
-                frappe.db.commit()
+                if not getattr(frappe.flags, "in_insert", False) and not getattr(frappe.flags, "in_submit", False):
+                    try:
+                        frappe.db.commit()
+                    except Exception:
+                        pass
             except Exception as log_err:
                 frappe.logger("custody_notification").error(f"Failed to record WhatsApp notification log: {log_err}")
 

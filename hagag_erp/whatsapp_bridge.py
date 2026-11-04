@@ -367,61 +367,121 @@ def generate_local_fallback_reply(user_message: str, error_context: str = "") ->
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Strict Whitelist Security Gate & Allowlist Verification
+# ──────────────────────────────────────────────────────────────────────────────
+
+def get_verified_contact_rule(sender_phone: str = "", sender_lid: str = "", sender_jid: str = "") -> dict | None:
+	"""
+	Strict Whitelist Security Gate:
+	Primary source of truth: Elsaidy WhatsApp Contact Rule table in MariaDB.
+	Returns the matching active rule dict ONLY if:
+	  1. A rule exists matching the normalized phone or exact LID.
+	  2. The rule has is_active == 1.
+	Returns None if:
+	  - No matching rule is found in the allowlist.
+	  - Rule has is_active == 0 (deactivated by admin).
+	  - Sender identity is ambiguous or unresolvable.
+	Never treats phone contacts, raw employee records, or incoming messages as authorization.
+	"""
+	norm_phone = normalize_phone_number(sender_phone) if sender_phone else ""
+	if not norm_phone and sender_jid and sender_jid.endswith("@s.whatsapp.net"):
+		norm_phone = normalize_phone_number(sender_jid.split("@")[0])
+
+	clean_lid = (sender_lid or "").strip()
+	if not clean_lid and sender_jid and sender_jid.endswith("@lid"):
+		clean_lid = sender_jid.strip()
+
+	if not norm_phone and not clean_lid:
+		frappe.logger("whatsapp_security").warning(
+			f"[SecurityGate] Refusing unresolvable sender: phone='{sender_phone}', lid='{sender_lid}', jid='{sender_jid}'"
+		)
+		return None
+
+	try:
+		active_rules = frappe.db.sql("""
+			SELECT name, contact_name, phone_number, whatsapp_lid, is_active, role, linked_employee,
+			       can_record_expenses, can_request_balance, can_create_purchase_invoice,
+			       default_project, default_cost_center, default_custody_account
+			FROM `tabElsaidy WhatsApp Contact Rule`
+			WHERE is_active = 1
+		""", as_dict=True)
+	except Exception as db_err:
+		frappe.logger("whatsapp_security").error(f"[SecurityGate] DB error querying contact rules: {db_err}")
+		return None  # Fail secure
+
+	if not active_rules:
+		return None
+
+	matched_rule = None
+
+	# 1. First priority: Exact LID Match
+	if clean_lid:
+		lid_prefix = clean_lid.split("@")[0]
+		for rule in active_rules:
+			r_lid = (rule.get("whatsapp_lid") or "").strip()
+			if r_lid and r_lid.split("@")[0] == lid_prefix:
+				matched_rule = rule
+				break
+
+	# 2. Second priority: Normalized Phone Number Match
+	if not matched_rule and norm_phone:
+		for rule in active_rules:
+			r_phone = normalize_phone_number(rule.get("phone_number") or "")
+			if not r_phone:
+				continue
+			if norm_phone == r_phone:
+				matched_rule = rule
+				break
+			if len(norm_phone) >= 9 and len(r_phone) >= 9:
+				if norm_phone.endswith(r_phone) or r_phone.endswith(norm_phone):
+					matched_rule = rule
+					break
+
+	return matched_rule
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Accounting & Custody Service Integration
 # ──────────────────────────────────────────────────────────────────────────────
 
 def query_employee_custody_balance(sender_phone: str, sender_lid: str = None) -> dict:
 	"""
 	Queries real posted custody balance directly from approved GL Entries in MariaDB.
-	Strictly enforces identity and authorization verification.
+	Strictly enforces identity, allowlist presence, and permission verification.
 	"""
-	norm_phone = normalize_phone_number(sender_phone)
-	if not norm_phone:
+	contact_rule = get_verified_contact_rule(sender_phone=sender_phone, sender_lid=sender_lid)
+	if not contact_rule:
 		return {
 			"authorized": False,
-			"reply_source": "Accounting Tool",
-			"intent": "Identity Verification Required",
-			"reply": "🔒 *تنبيه أمني - التحقق من الهوية*\nتعذر تحديد رقم الهاتف للتحقق من الصلاحيات المالية."
+			"reply": None,
+			"reply_source": "Security",
+			"intent": "Unauthorized"
 		}
 
-	# 1. Identity & Permissions Verification
-	contact_rule = None
-	rules = frappe.db.sql("""
-		SELECT * FROM `tabElsaidy WhatsApp Contact Rule`
-		WHERE is_active = 1
-		  AND (phone_number = %s OR phone_number LIKE %s OR (whatsapp_lid IS NOT NULL AND whatsapp_lid = %s))
-		LIMIT 1
-	""", (norm_phone, f"%{norm_phone[-9:]}", sender_lid or ""), as_dict=True)
-	if rules:
-		contact_rule = rules[0]
+	if not contact_rule.get("can_request_balance"):
+		return {
+			"authorized": False,
+			"reply_source": "Security",
+			"intent": "Balance Permission Denied",
+			"reply": "⛔ ليس لديك صلاحية الاستعلام عن رصيد العهدة عبر واتساب من هذا الرقم."
+		}
 
+	emp_id = contact_rule.get("linked_employee") or contact_rule.get("employee")
 	employee_doc = None
-	if contact_rule and contact_rule.get("employee"):
-		employee_doc = frappe.db.get_value("Employee", contact_rule["employee"], ["name", "employee_name", "status", "company"], as_dict=True)
-	
-	if not employee_doc:
-		emps = frappe.db.sql("""
-			SELECT name, employee_name, status, company
-			FROM `tabEmployee`
-			WHERE (cell_number = %s OR cell_number LIKE %s)
-			LIMIT 1
-		""", (norm_phone, f"%{norm_phone[-9:]}"), as_dict=True)
-		if emps:
-			employee_doc = emps[0]
+	if emp_id:
+		employee_doc = frappe.db.get_value(
+			"Employee",
+			{"name": emp_id, "status": "Active"},
+			["name", "employee_name", "status", "company"],
+			as_dict=True
+		)
 
-	# Check authorization
-	can_balance = bool(contact_rule.get("can_request_balance", 1)) if contact_rule else bool(employee_doc)
-	if not employee_doc or not can_balance:
+	if not employee_doc:
 		return {
 			"authorized": False,
 			"reply_source": "Accounting Tool",
-			"intent": "Identity Verification Required",
-			"reply": (
-				"🔒 *تنبيه أمني - التحقق من الهوية*\n"
-				"━━━━━━━━━━━━━━━━━━━\n"
-				"عذراً، رقم الهاتف غير مسجل ضمن الموظفين المصرح لهم بالاطلاع على البيانات المالية والعهد.\n"
-				"يرجى التواصل مع الإدارة المالية لاعتماد رقمك في المنظومة."
-			)
+			"intent": "Unlinked Employee",
+			"reply": "⚠️ لم يتم ربط هذا الرقم بملف موظف نشط في النظام المحاسبي. يرجى مراجعة إدارة الموارد البشرية."
 		}
 
 	# 2. Custody Account & GL Entries
@@ -431,7 +491,7 @@ def query_employee_custody_balance(sender_phone: str, sender_lid: str = None) ->
 		custody_account = "1120 - عهد نقدية للمهندسين والمشرفين - Rkn"
 
 	emp_name = employee_doc.get("employee_name") or (contact_rule.get("contact_name") if contact_rule else "الموظف")
-	emp_id = employee_doc.get("name") if employee_doc else (contact_rule.get("employee") if contact_rule else None)
+	emp_id = employee_doc.get("name")
 
 	# Query approved GL Entries (docstatus=1 strictly)
 	if emp_id:
@@ -562,9 +622,14 @@ def process_expense_interactive(text: str, sender_phone: str, sender_name: str, 
 	if not parsed or not parsed.get("amount") or parsed["amount"] <= 0:
 		return None
 
-	if contact_rule and not contact_rule.get("can_record_expenses", 1):
+	if not contact_rule:
+		contact_rule = get_verified_contact_rule(sender_phone=sender_phone)
+	if not contact_rule:
+		return None
+
+	if not contact_rule.get("can_record_expenses"):
 		return {
-			"reply_source": "Accounting Tool",
+			"reply_source": "Security",
 			"intent": "Expense Permission Denied",
 			"reply": "⛔ ليس لديك صلاحية تسجيل المصاريف عبر واتساب من هذا الرقم."
 		}
@@ -839,6 +904,28 @@ def send_baileys_reply(jid: str, text: str, quoted_msg_id: str = None) -> dict:
 		frappe.logger("whatsapp").warn(f"[SendBlocked] Refusing to reply to bot's own number: {clean_jid}")
 		return {"status": "ignored", "reason": "Cannot reply to bot itself"}
 
+	# Strict Whitelist Guard: Destination must be an active allowlisted contact or allowed group
+	if not clean_jid.endswith("@g.us"):
+		recipient_phone = clean_jid.split("@")[0] if "@s.whatsapp.net" in clean_jid else ""
+		recipient_lid = clean_jid if "@lid" in clean_jid else ""
+		rule = get_verified_contact_rule(sender_phone=recipient_phone, sender_lid=recipient_lid, sender_jid=clean_jid)
+		if not rule:
+			frappe.logger("whatsapp_security").error(
+				f"[SendBlocked] Strict allowlist blocked outgoing reply to unauthorized recipient: {clean_jid}"
+			)
+			return {"status": "ignored", "reason": "Recipient not in active allowlist"}
+	else:
+		is_allowed_group = frappe.db.sql("""
+			SELECT 1 FROM `tabElsaidy WhatsApp Allowed Group`
+			WHERE is_active = 1 AND group_jid = %s
+			LIMIT 1
+		""", (clean_jid,))
+		if not is_allowed_group:
+			frappe.logger("whatsapp_security").error(
+				f"[SendBlocked] Strict allowlist blocked outgoing reply to unauthorized group: {clean_jid}"
+			)
+			return {"status": "ignored", "reason": "Group not in active allowlist"}
+
 	# Always resolve to canonical delivery JID ({phone}@s.whatsapp.net)
 	target_jid = resolve_destination_jid(clean_jid)
 
@@ -976,7 +1063,7 @@ def receive_baileys_event():
 	log_doc.status = "Received"
 	log_doc.delivery_status = "Delivered"
 
-	# 3. Access Control Verification & Dynamic Contact Matching
+	# ── 3. Strict Allowlist Security Gate ────────────────────────────────────
 	target_project = None
 	target_cost_center = hub.default_cost_center if hub else "رئيسي - Rkn"
 	company = (hub.default_company if hub and hub.default_company else None) or "ركن سبل الافق"
@@ -984,86 +1071,79 @@ def receive_baileys_event():
 	group_rule = None
 
 	if is_group:
-		matching_groups = [r for r in hub.allowed_groups if r.group_jid == group_jid and r.is_active] if hub else []
-		if matching_groups:
-			group_rule = matching_groups[0]
-			log_doc.group_name = group_rule.group_name
-			target_project = group_rule.default_project
-			target_cost_center = group_rule.default_cost_center or target_cost_center
+		matching_groups = frappe.db.sql("""
+			SELECT * FROM `tabElsaidy WhatsApp Allowed Group`
+			WHERE is_active = 1 AND group_jid = %s
+			LIMIT 1
+		""", (group_jid,), as_dict=True)
 
-			if group_rule.require_mention:
-				bot_phone = hub.connected_phone or hub.bot_phone_number or ""
-				if bot_phone and bot_phone not in text and "@" not in text:
-					log_doc.status = "Ignored"
-					log_doc.error_message = "Group message ignored (require_mention active and bot not tagged)"
-					log_doc.insert(ignore_permissions=True)
-					frappe.db.commit()
-					return {"status": "ignored", "reason": "No mention"}
-		else:
-			if not (hub and hub.allow_unregistered_groups):
+		if not matching_groups:
+			log_doc.status = "Ignored"
+			log_doc.reply_text = None
+			log_doc.extracted_intent = "[Security] Unauthorized Group Blocked"
+			log_doc.error_message = f"Unauthorized group: {group_jid}"
+			log_doc.insert(ignore_permissions=True)
+			frappe.db.commit()
+			return {"status": "rejected", "reason": "unauthorized_group", "silent_drop": True}
+
+		group_rule = matching_groups[0]
+		log_doc.group_name = group_rule.get("group_name")
+		target_project = group_rule.get("default_project")
+		target_cost_center = group_rule.get("default_cost_center") or target_cost_center
+
+		if group_rule.get("require_mention"):
+			bot_phone = hub.connected_phone or hub.bot_phone_number or ""
+			if bot_phone and bot_phone not in text and "@" not in text:
 				log_doc.status = "Ignored"
-				log_doc.error_message = f"Unregistered group: {group_jid}"
+				log_doc.reply_text = None
+				log_doc.error_message = "Group message ignored (require_mention active and bot not tagged)"
 				log_doc.insert(ignore_permissions=True)
 				frappe.db.commit()
-				return {"status": "ignored", "reason": "Unregistered group"}
+				return {"status": "ignored", "reason": "No mention"}
+
+		# Check participant authorization in group
+		participant_jid = data.get("participant") or sender_jid
+		contact_rule = get_verified_contact_rule(sender_jid=participant_jid)
 	else:
-		# Match Contact Rule
-		matching_contacts = []
-		if hub:
-			for c in hub.allowed_direct_contacts:
-				if not c.is_active:
-					continue
-				c_norm = normalize_phone_number(c.phone_number)
-				c_lid = (getattr(c, "whatsapp_lid", "") or "").strip()
+		# Direct 1-to-1 Message: STRICT ALLOWLIST CHECK
+		contact_rule = get_verified_contact_rule(
+			sender_phone=sender_phone,
+			sender_lid=sender_lid,
+			sender_jid=sender_jid
+		)
 
-				if c_lid and sender_lid and (c_lid in sender_lid or sender_lid in c_lid):
-					matching_contacts.append(c)
-					if not sender_phone and c_norm:
-						sender_phone = c_norm
-						log_doc.sender_phone = sender_phone
-					break
+		if not contact_rule:
+			# STRICT SILENT DROP: No automated reply, no rejection message, no greeting!
+			log_doc.status = "Ignored"
+			log_doc.reply_text = None
+			log_doc.extracted_intent = "[Security] Unauthorized Sender Blocked"
+			log_doc.error_message = f"Unauthorized direct sender: {sender_phone or sender_jid or sender_lid} (Not in active allowlist)"
+			log_doc.insert(ignore_permissions=True)
+			frappe.db.commit()
+			frappe.logger("whatsapp_security").warning(
+				f"[StrictAllowlist] Blocked unauthorized message from '{sender_phone or sender_jid or sender_lid}'. Silent drop (Zero reply)."
+			)
+			return {
+				"status": "rejected",
+				"reason": "unauthorized_allowlist",
+				"silent_drop": True,
+				"message": "Sender not in active allowlist. Silent drop (Zero reply)."
+			}
 
-				if sender_phone and c_norm == sender_phone:
-					matching_contacts.append(c)
-					break
+		target_project = contact_rule.get("default_project")
+		target_cost_center = contact_rule.get("default_cost_center") or target_cost_center
 
-				if sender_jid and (c_norm in sender_jid or (c.phone_number and c.phone_number in sender_jid)):
-					matching_contacts.append(c)
-					if not sender_phone and c_norm:
-						sender_phone = c_norm
-						log_doc.sender_phone = sender_phone
-					break
-
-		if matching_contacts:
-			contact_rule = matching_contacts[0]
-			target_project = contact_rule.default_project
-			target_cost_center = contact_rule.default_cost_center or target_cost_center
-
-			# Dynamic Auto-Learning of sender_lid
-			c_lid = getattr(contact_rule, "whatsapp_lid", "") or ""
-			if sender_lid and not c_lid:
-				try:
-					frappe.db.set_value("Elsaidy WhatsApp Contact Rule", contact_rule.name, "whatsapp_lid", sender_lid, update_modified=False)
-					frappe.db.commit()
-					call_baileys_api("sync-contact-mapping", method="POST", data={
-						"mappings": [{"lid": sender_lid, "phone": normalize_phone_number(contact_rule.phone_number)}]
-					})
-				except Exception:
-					pass
-		else:
-			if not (hub and hub.allow_unregistered_direct):
-				unregistered_msg = hub.unregistered_auto_reply if (hub and hub.unregistered_auto_reply) else (
-					"عذراً، لست مرخصاً للتفاعل مع بوت Elsaidy ERP. تواصل معنا من خلال القنوات الرسمية."
-				)
-				if hub and hub.auto_reply_enabled:
-					send_baileys_reply(reply_jid, unregistered_msg, quoted_msg_id=msg_id)
-
-				log_doc.status = "Ignored"
-				log_doc.reply_text = unregistered_msg
-				log_doc.error_message = f"Unregistered direct sender: {sender_phone or sender_jid or sender_lid}"
-				log_doc.insert(ignore_permissions=True)
+		# Dynamic Auto-Learning of sender_lid for verified contact
+		c_lid = getattr(contact_rule, "whatsapp_lid", "") if hasattr(contact_rule, "whatsapp_lid") else (contact_rule.get("whatsapp_lid") or "")
+		if sender_lid and not c_lid:
+			try:
+				frappe.db.set_value("Elsaidy WhatsApp Contact Rule", contact_rule.get("name"), "whatsapp_lid", sender_lid, update_modified=False)
 				frappe.db.commit()
-				return {"status": "rejected", "reason": "Unregistered contact"}
+				call_baileys_api("sync-contact-mapping", method="POST", data={
+					"mappings": [{"lid": sender_lid, "phone": normalize_phone_number(contact_rule.get("phone_number"))}]
+				})
+			except Exception:
+				pass
 
 	# ── 4. Check Human Takeover Active ───────────────────────────────────────
 	is_takeover = False
@@ -1228,8 +1308,9 @@ def receive_baileys_event():
 				log_doc.error_message = err_msg
 		else:
 			# Fallback when AI is disabled
+			contact_display_name = (contact_rule.get("contact_name") if contact_rule else "") or "يا فندم"
 			if is_greeting:
-				reply_content = "أهلاً بك يا أستاذ علي! كيف يمكنني مساعدتك في مهامك المالية أو الإدارية اليوم؟"
+				reply_content = f"أهلاً بك يا {contact_display_name}! كيف يمكنني مساعدتك في مهامك المالية أو الإدارية اليوم؟"
 				reply_source = "Fallback Template"
 				intent_name = "Natural Greeting"
 			else:

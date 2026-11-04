@@ -18,6 +18,53 @@ from hagag_erp.idempotency import (
 )
 
 
+
+def format_tool_response(
+    success: bool,
+    doctype: str = None,
+    document_name: str = None,
+    docstatus: int = None,
+    amount: float = None,
+    employee_id: str = None,
+    operation_id: str = None,
+    document_url: str = None,
+    error: str = None,
+    message: str = None,
+    requires_clarification: bool = False,
+    missing_fields: list = None,
+    extra: dict = None
+) -> dict:
+    """
+    Standardized tool response conforming to Phase 2 requirements:
+    success, operation_id, doctype, document_name, docstatus, amount, employee_id, document_url, error.
+    """
+    if document_name and doctype and not document_url:
+        try:
+            document_url = frappe.utils.get_url_to_form(doctype, document_name)
+        except Exception:
+            document_url = f"https://erp.elsaidy.org/app/{frappe.scrub(doctype)}/{document_name}"
+
+    res = {
+        "success": bool(success),
+        "operation_id": operation_id or "",
+        "doctype": doctype or "",
+        "document_name": document_name or "",
+        "docstatus": docstatus,
+        "amount": float(amount) if amount is not None else 0.0,
+        "employee_id": employee_id or "",
+        "document_url": document_url or "",
+        "error": error,
+        "message": message or (error if not success else "تمت العملية بنجاح."),
+        "status": "success" if success else "error"
+    }
+    if requires_clarification:
+        res["requires_clarification"] = True
+        res["missing_fields"] = missing_fields or []
+    if extra and isinstance(extra, dict):
+        res.update(extra)
+    return res
+
+
 def get_default_company(company=None):
     if company and frappe.db.exists("Company", company):
         return company
@@ -1462,16 +1509,19 @@ def record_employee_custody_expense(
     amount: float = None,
     expense_category: str = "fuel",
     description: str = None,
-    is_inclusive: int = 1,
-    has_valid_invoice: int = 1,
+    is_inclusive: int = None,
+    has_valid_invoice: int = None,
     vehicle_type: str = "commercial_equipment",
     company: str = None,
-    operation_id: str = None
+    operation_id: str = None,
+    **kwargs
 ) -> dict:
     """
-    Controlled Draft creation for employee custody work expense (Intent B).
+    Phase 2 & Phase 3: Controlled Draft creation for employee custody work expense (Intent B).
+    Strictly verifies tax treatment: refuses to assume 15% VAT if not specified.
     Creates a balanced draft Journal Entry (docstatus=0).
     Never submits automatically.
+    Returns standardized format_tool_response.
     """
     from hagag_erp.custody_service import (
         resolve_employee,
@@ -1486,16 +1536,53 @@ def record_employee_custody_expense(
         to_decimal
     )
 
-    if not verify_user_authorization():
-        frappe.throw(_("ليس لديك صلاحية لتسجيل مصروفات العهد."), frappe.PermissionError)
+    if not frappe.has_permission("Journal Entry", "create") and not verify_user_authorization():
+        return format_tool_response(
+            success=False,
+            amount=amount,
+            employee_id=employee,
+            error="ليس لديك صلاحية لتسجيل مصروفات العهد في ERPNext.",
+            message="🔒 تنبيه أمني: لا تملك صلاحية إنشاء قيود محاسبية."
+        )
 
     if not amount or flt(amount) <= 0:
-        return {"status": "error", "message": "يجب تحديد مبلغ المصروف بشكل صحيح."}
+        return format_tool_response(
+            success=False,
+            error="يجب تحديد مبلغ المصروف بشكل صحيح.",
+            message="المبلغ غير محدد أو غير صالح."
+        )
+
+    # Tax treatment verification (Phase 3)
+    tax_status = kwargs.get("tax_status")
+    if is_inclusive is None and tax_status in (None, "unspecified", ""):
+        return format_tool_response(
+            success=False,
+            amount=amount,
+            employee_id=employee,
+            requires_clarification=True,
+            missing_fields=["tax_status", "has_valid_invoice"],
+            error="المعالجة الضريبية غير محددة",
+            message=(
+                f"⚠️ *يلزم تحديد المعالجة الضريبية قبل إنشاء القيد:*\n"
+                f"المبلغ المطلوب: `{flt(amount):,.2f}` ريال لمصروف ({expense_category}).\n"
+                f"1. هل المبلغ شامل ضريبة القيمة المضافة 15% أم غير شامل للضريبة؟\n"
+                f"2. هل تتوفر فاتورة ضريبية نظامية للمعدات/السيارات التشغيلية؟\n\n"
+                f"يرجى توضيح ذلك لتطبيق المعالجة المحاسبية والضريبية الصحيحة."
+            )
+        )
+
+    inc_flag = 1 if (is_inclusive or tax_status == "inclusive") else 0
+    inv_flag = 1 if (has_valid_invoice or kwargs.get("has_tax_invoice")) else 0
 
     comp_name, abbr = get_target_company(company)
     emp_res = resolve_employee(identifier=employee, user_id=frappe.session.user, company=comp_name)
     if emp_res.get("status") != "success":
-        return emp_res
+        return format_tool_response(
+            success=False,
+            amount=amount,
+            error=emp_res.get("message") or "تعذر تحديد هوية الموظف.",
+            message=emp_res.get("message")
+        )
 
     emp_id = emp_res["employee"]
     emp_name = emp_res["employee_name"]
@@ -1504,12 +1591,19 @@ def record_employee_custody_expense(
     if operation_id:
         existing_jv = frappe.db.get_value("Journal Entry", {"user_remark": ["like", f"%[{operation_id}]%"]}, "name")
         if existing_jv:
-            return {
-                "status": "success",
-                "message": f"العملية مسجلة مسبقاً برقم القيد {existing_jv}.",
-                "journal_entry": existing_jv,
-                "is_duplicate": True
-            }
+            doc_url = frappe.utils.get_url_to_form("Journal Entry", existing_jv)
+            return format_tool_response(
+                success=True,
+                operation_id=operation_id,
+                doctype="Journal Entry",
+                document_name=existing_jv,
+                docstatus=0,
+                amount=float(amount),
+                employee_id=emp_id,
+                document_url=doc_url,
+                message=f"العملية مسجلة مسبقاً برقم القيد {existing_jv}.",
+                extra={"is_duplicate": True, "journal_entry": existing_jv}
+            )
 
     exp_account = get_verified_account_for_category(expense_category, comp_name)
     custody_account, _ = get_verified_payment_account("custody", comp_name)
@@ -1518,10 +1612,10 @@ def record_employee_custody_expense(
     tax_eval = evaluate_vat_eligibility_and_split(
         amount=to_decimal(amount),
         account_code=exp_account,
-        is_taxable=True,
-        amount_basis="inclusive" if frappe.utils.cint(is_inclusive) else "exclusive",
+        is_taxable=True if tax_status != "no_tax" else False,
+        amount_basis="inclusive" if inc_flag else "exclusive",
         usage_type="commercial" if vehicle_type == "commercial_equipment" else "passenger_restricted",
-        has_valid_tax_invoice=bool(frappe.utils.cint(has_valid_invoice)),
+        has_valid_tax_invoice=bool(inv_flag),
         company=comp_name
     )
 
@@ -1546,6 +1640,7 @@ def record_employee_custody_expense(
         "credit_in_account_currency": 0.0,
         "debit": float(net_exp),
         "credit": 0.0,
+        "cost_center": "رئيسي - Rkn",
         "user_remark": user_rem
     })
 
@@ -1557,7 +1652,8 @@ def record_employee_custody_expense(
             "credit_in_account_currency": 0.0,
             "debit": float(tax_eligible),
             "credit": 0.0,
-            "user_remark": "ضريبة مدخلات 15% مستردة - ZATCA"
+            "cost_center": "رئيسي - Rkn",
+            "user_remark": "ضريبة مدخلات 15% مستردة - ZATCA المادة 50"
         })
     elif tax_pending > Decimal("0.00"):
         je.append("accounts", {
@@ -1566,6 +1662,7 @@ def record_employee_custody_expense(
             "credit_in_account_currency": 0.0,
             "debit": float(tax_pending),
             "credit": 0.0,
+            "cost_center": "رئيسي - Rkn",
             "user_remark": "ضريبة مدخلات معلقة قيد المراجعة الضريبية (المادة 50)"
         })
 
@@ -1578,21 +1675,527 @@ def record_employee_custody_expense(
         "credit_in_account_currency": float(gross_total),
         "debit": 0.0,
         "credit": float(gross_total),
+        "cost_center": "رئيسي - Rkn",
         "user_remark": f"تسوية عهدة الموظف: {emp_name} ({emp_id})"
     })
 
     je.save(ignore_permissions=True)
     frappe.db.commit()
 
-    return {
-        "status": "success",
-        "docstatus": 0,
-        "journal_entry": je.name,
-        "message": f"تم إنشاء مسودة قيد تسوية عهدة رقم {je.name} بقيمة {float(gross_total):,.2f} ريال بنجاح (Draft - قيد المراجعة).",
-        "net_amount": float(net_exp),
-        "tax_amount": float(tax_eligible + tax_pending),
-        "total_amount": float(gross_total)
+    # Verify DB existence (Phase 2 Step 3)
+    if not frappe.db.exists("Journal Entry", je.name):
+        return format_tool_response(
+            success=False,
+            amount=float(gross_total),
+            employee_id=emp_id,
+            error="فشل حفظ قيد اليومية في قاعدة البيانات.",
+            message="فشل الحفظ."
+        )
+
+    doc_url = frappe.utils.get_url_to_form("Journal Entry", je.name)
+    success_msg = (
+        f"✅ *تم إنشاء مسودة القيد بنجاح في النظام 🧾*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔖 *رقم القيد:* `{je.name}`\n"
+        f"📄 *الحالة:* مسودة (Draft - غير مرحل)\n"
+        f"👤 *الموظف:* {emp_name} (`{emp_id}`)\n"
+        f"💵 *المبلغ الصافي:* {float(net_exp):,.2f} ريال\n"
+        f"🏛️ *ضريبة القيمة المضافة:* {float(tax_eligible + tax_pending):,.2f} ريال\n"
+        f"💰 *المجموع الإجمالي:* {float(gross_total):,.2f} ريال\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔗 *رابط مراجعة واعتماد القيد:*\n{doc_url}\n"
+        f"⚠️ *ملاحظة:* القيد مسودة ولا يؤثر على رصيد الأستاذ العام إلا بعد اعتماده."
+    )
+
+    return format_tool_response(
+        success=True,
+        doctype="Journal Entry",
+        document_name=je.name,
+        docstatus=0,
+        amount=float(gross_total),
+        employee_id=emp_id,
+        operation_id=operation_id,
+        document_url=doc_url,
+        message=success_msg,
+        extra={
+            "journal_entry": je.name,
+            "net_amount": float(net_exp),
+            "tax_amount": float(tax_eligible + tax_pending),
+            "total_amount": float(gross_total)
+        }
+    )
+
+
+@frappe.whitelist()
+def prepare_financial_operation_preview(
+    operation_type: str = "custody_expense",
+    amount: float = None,
+    employee: str = None,
+    tax_status: str = "unspecified",
+    has_tax_invoice: int = None,
+    expense_category: str = "fuel",
+    vehicle_type: str = "commercial_equipment",
+    description: str = None,
+    company: str = None,
+    channel_id: str = None,
+    **kwargs
+) -> dict:
+    """
+    Phase 4: Prepares an accurate simulation & financial preview for a transaction.
+    Enforces Phase 3 tax verification: refuses to guess VAT if tax_status is unspecified.
+    Generates a unique operation_id and caches the pending transaction for explicit confirmation.
+    NEVER creates any document in the database during preview!
+    """
+    from hagag_erp.custody_service import resolve_employee, simulate_custody_workflow, verify_user_authorization
+    from hagag_erp.tax_engine import get_target_company
+
+    if not amount or flt(amount) <= 0:
+        return format_tool_response(
+            success=False,
+            error="يجب تحديد مبلغ العملية بشكل صحيح.",
+            message="المبلغ غير محدد أو غير صالح."
+        )
+
+    # Permission check
+    if not frappe.has_permission("Journal Entry", "create") and not verify_user_authorization():
+        return format_tool_response(
+            success=False,
+            amount=amount,
+            employee_id=employee,
+            error="ليس لديك صلاحية لتنفيذ أو معاينة القيود المالية.",
+            message="🔒 تنبيه أمني: لا تملك صلاحية إنشاء قيود محاسبية."
+        )
+
+    comp_name, abbr = get_target_company(company)
+    emp_res = resolve_employee(identifier=employee, user_id=frappe.session.user, company=comp_name)
+    if emp_res.get("status") != "success":
+        return format_tool_response(
+            success=False,
+            amount=amount,
+            error=emp_res.get("message") or "تعذر تحديد هوية الموظف.",
+            message=emp_res.get("message")
+        )
+
+    emp_id = emp_res["employee"]
+    emp_name = emp_res["employee_name"]
+
+    # Tax Verification (Phase 3)
+    if operation_type == "custody_expense":
+        raw_tax = (tax_status or kwargs.get("is_inclusive") or "unspecified")
+        if raw_tax in ("unspecified", None, ""):
+            return format_tool_response(
+                success=False,
+                amount=amount,
+                employee_id=emp_id,
+                requires_clarification=True,
+                missing_fields=["tax_status", "has_tax_invoice"],
+                error="المعالجة الضريبية غير محددة",
+                message=(
+                    f"⚠️ *يلزم تحديد المعالجة الضريبية قبل إنشاء المعاينة:*\n"
+                    f"المبلغ المطلوب: `{flt(amount):,.2f}` ريال لمصروف ({expense_category}).\n"
+                    f"1. هل المبلغ شامل ضريبة القيمة المضافة 15% أم غير شامل للضريبة؟\n"
+                    f"2. هل تتوفر فاتورة ضريبية نظامية مسجلة باسم الشركة للمعدات/السيارات التشغيلية؟\n\n"
+                    f"يرجى توضيح ذلك (مثال: 'شامل الضريبة ومعه فاتورة نظامية')."
+                )
+            )
+
+    # Execute simulation (Phase 4 Step 3)
+    sim_res = simulate_custody_workflow(
+        text=description or f"مصروف {expense_category} بمبلغ {amount} ريال للموظف {emp_name}",
+        sender_phone=None,
+        user_id=frappe.session.user
+    )
+
+    op_id = generate_operation_id(prefix="OP-PREV")
+
+    # Pending operation payload
+    pending_payload = {
+        "operation_id": op_id,
+        "operation_type": operation_type,
+        "amount": float(amount),
+        "employee_id": emp_id,
+        "employee_name": emp_name,
+        "company": comp_name,
+        "expense_category": expense_category,
+        "vehicle_type": vehicle_type,
+        "tax_status": tax_status,
+        "has_tax_invoice": 1 if has_tax_invoice else 0,
+        "description": description or f"تسوية مصروف {expense_category} من عهدة {emp_name} ({emp_id})",
+        "created_at": time.time(),
+        "created_by": frappe.session.user,
+        "channel_id": channel_id,
+        "simulated_lines": sim_res.get("proposed_lines") or []
     }
+
+    # Cache pending operation with 15-minute TTL
+    frappe.cache().set_value(f"pending_fin_op:{op_id}", json.dumps(pending_payload), expires_in_sec=900)
+    if channel_id:
+        frappe.cache().set_value(f"latest_channel_pending_op:{channel_id}", op_id, expires_in_sec=900)
+    frappe.cache().set_value(f"latest_user_pending_op:{frappe.session.user}", op_id, expires_in_sec=900)
+
+    preview_msg = (
+        f"📋 *معاينة المعاملة المالية المحاسبية (Dry Run)*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔖 *معرّف العملية:* `{op_id}`\n"
+        f"👤 *الموظف المسؤول:* {emp_name} (`{emp_id}`)\n"
+        f"💰 *إجمالي المبلغ:* {float(amount):,.2f} ريال سعودي\n"
+        f"📝 *البيان:* {pending_payload['description']}\n"
+        f"📊 *الأثر المتوقع:* رصيد العهدة سينخفض بمقدار {float(amount):,.2f} ريال\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚠️ *ملاحظة:* هذه معاينة فقط ولم يتم إنشاء أي قيد أو حجز في الدفاتر.\n"
+        f"👉 لتنفيذ القيد واعتماده، يرجى الرد بـ: `أكد {op_id}` أو `اعتمد`."
+    )
+
+    return format_tool_response(
+        success=True,
+        operation_id=op_id,
+        doctype="Journal Entry",
+        amount=float(amount),
+        employee_id=emp_id,
+        message=preview_msg,
+        extra={
+            "status": "preview_ready",
+            "operation_id": op_id,
+            "preview_summary": sim_res.get("summary_text") or preview_msg,
+            "simulated_lines": sim_res.get("proposed_lines")
+        }
+    )
+
+
+@frappe.whitelist()
+def execute_confirmed_financial_operation(
+    operation_id: str = None,
+    channel_id: str = None,
+    submit: int = 1,
+    **kwargs
+) -> dict:
+    """
+    Phase 4: Strictly executes a previously prepared and cached financial operation.
+    Verifies Frappe user permissions.
+    Executes exactly once (atomic cache invalidation).
+    Verifies document creation and submission in MariaDB.
+    Enqueues WhatsApp notification to employee on submission.
+    Returns standardized response schema with verified Frappe URL.
+    """
+    from hagag_erp.tax_engine import (
+        get_company_tax_accounts,
+        evaluate_vat_eligibility_and_split,
+        to_decimal
+    )
+    from hagag_erp.custody_service import (
+        get_verified_account_for_category,
+        get_verified_payment_account,
+        send_custody_whatsapp_notification,
+        verify_user_authorization
+    )
+
+    # 1. Resolve operation_id
+    target_op_id = operation_id
+    if not target_op_id and channel_id:
+        target_op_id = frappe.cache().get_value(f"latest_channel_pending_op:{channel_id}")
+        if target_op_id and isinstance(target_op_id, bytes):
+            target_op_id = target_op_id.decode("utf-8")
+    if not target_op_id:
+        target_op_id = frappe.cache().get_value(f"latest_user_pending_op:{frappe.session.user}")
+        if target_op_id and isinstance(target_op_id, bytes):
+            target_op_id = target_op_id.decode("utf-8")
+
+    if not target_op_id:
+        return format_tool_response(
+            success=False,
+            error="لا توجد عملية مالية معلقة جاهزة للتأكيد أو انتهت صلاحيتها. يرجى طلب العملية من جديد والحصول على معاينة حديثة.",
+            message="لا توجد عملية معلقة للتأكيد."
+        )
+
+    cached_str = frappe.cache().get_value(f"pending_fin_op:{target_op_id}")
+    if not cached_str:
+        return format_tool_response(
+            success=False,
+            operation_id=target_op_id,
+            error=f"معرف العملية [{target_op_id}] غير صالح أو تم تنفيذه مسبقاً أو انتهت مدة التأكيد (15 دقيقة).",
+            message="انتهت صلاحية المعاينة أو نُفذت بالفعل."
+        )
+
+    if isinstance(cached_str, bytes):
+        cached_str = cached_str.decode("utf-8")
+    op_data = json.loads(cached_str)
+
+    # 2. Check Permissions (Phase 2 Step 10)
+    if not frappe.has_permission("Journal Entry", "create") and not verify_user_authorization():
+        return format_tool_response(
+            success=False,
+            operation_id=target_op_id,
+            error="ليس لديك صلاحية لإنشاء قيود اليومية في ERPNext.",
+            message="🔒 تنبيه أمني: لا تملك صلاحية محاسبية لإنشاء القيود."
+        )
+    if frappe.utils.cint(submit) and not frappe.has_permission("Journal Entry", "submit") and not verify_user_authorization():
+        return format_tool_response(
+            success=False,
+            operation_id=target_op_id,
+            error="ليس لديك صلاحية لاعتماد وترحيل قيود اليومية في ERPNext.",
+            message="🔒 تنبيه أمني: لا تملك صلاحية اعتماد القيود."
+        )
+
+    # 3. Check Idempotency (Phase 2 Step 9)
+    existing_jv = frappe.db.get_value("Journal Entry", {"user_remark": ["like", f"%[{target_op_id}]%"]}, ["name", "docstatus"], as_dict=True)
+    if existing_jv:
+        # Already executed! Invalidate cache to prevent any loop
+        frappe.cache().delete_value(f"pending_fin_op:{target_op_id}")
+        doc_url = frappe.utils.get_url_to_form("Journal Entry", existing_jv.name)
+        return format_tool_response(
+            success=True,
+            operation_id=target_op_id,
+            doctype="Journal Entry",
+            document_name=existing_jv.name,
+            docstatus=existing_jv.docstatus,
+            amount=op_data.get("amount"),
+            employee_id=op_data.get("employee_id"),
+            document_url=doc_url,
+            message=f"العملية منفذة مسبقاً برقم القيد {existing_jv.name} لتفادي التكرار."
+        )
+
+    # 4. Build and Insert Journal Entry
+    comp_name = op_data["company"]
+    emp_id = op_data["employee_id"]
+    emp_name = op_data["employee_name"]
+    amount = op_data["amount"]
+    expense_category = op_data.get("expense_category", "fuel")
+    vehicle_type = op_data.get("vehicle_type", "commercial_equipment")
+    tax_status = op_data.get("tax_status", "inclusive")
+    has_invoice = op_data.get("has_tax_invoice", 1)
+
+    exp_account = get_verified_account_for_category(expense_category, comp_name)
+    custody_account, _ = get_verified_payment_account("custody", comp_name)
+    tax_accounts = get_company_tax_accounts(comp_name)
+
+    tax_eval = evaluate_vat_eligibility_and_split(
+        amount=to_decimal(amount),
+        account_code=exp_account,
+        is_taxable=True if tax_status != "no_tax" else False,
+        amount_basis="inclusive" if tax_status == "inclusive" else "exclusive",
+        usage_type="commercial" if vehicle_type == "commercial_equipment" else "passenger_restricted",
+        has_valid_tax_invoice=bool(has_invoice),
+        company=comp_name
+    )
+
+    net_exp = tax_eval["net_expense"]
+    tax_eligible = tax_eval["tax_eligible"]
+    tax_pending = tax_eval["tax_pending"]
+    gross_total = tax_eval["gross_amount"]
+
+    je = frappe.new_doc("Journal Entry")
+    je.voucher_type = "Journal Entry"
+    je.company = comp_name
+    je.posting_date = frappe.utils.nowdate()
+    user_rem = op_data.get("description") or f"تسوية مصروف {expense_category} من عهدة {emp_name} ({emp_id})"
+    je.user_remark = f"{user_rem} [{target_op_id}]"
+
+    # Debit Expense
+    je.append("accounts", {
+        "account": exp_account,
+        "debit_in_account_currency": float(net_exp),
+        "credit_in_account_currency": 0.0,
+        "debit": float(net_exp),
+        "credit": 0.0,
+        "cost_center": "رئيسي - Rkn",
+        "user_remark": user_rem
+    })
+
+    # Debit VAT if applicable
+    if tax_eligible > Decimal("0.00"):
+        je.append("accounts", {
+            "account": tax_accounts["recoverable_vat"],
+            "debit_in_account_currency": float(tax_eligible),
+            "credit_in_account_currency": 0.0,
+            "debit": float(tax_eligible),
+            "credit": 0.0,
+            "cost_center": "رئيسي - Rkn",
+            "user_remark": "ضريبة مدخلات 15% مستردة - ZATCA المادة 50"
+        })
+    elif tax_pending > Decimal("0.00"):
+        je.append("accounts", {
+            "account": tax_accounts["pending_vat"],
+            "debit_in_account_currency": float(tax_pending),
+            "credit_in_account_currency": 0.0,
+            "debit": float(tax_pending),
+            "credit": 0.0,
+            "cost_center": "رئيسي - Rkn",
+            "user_remark": "ضريبة مدخلات معلقة قيد المراجعة الضريبية"
+        })
+
+    # Credit Custody Account 1120 with Party Type = Employee
+    je.append("accounts", {
+        "account": custody_account,
+        "party_type": "Employee",
+        "party": emp_id,
+        "debit_in_account_currency": 0.0,
+        "credit_in_account_currency": float(gross_total),
+        "debit": 0.0,
+        "credit": float(gross_total),
+        "cost_center": "رئيسي - Rkn",
+        "user_remark": f"تسوية عهدة الموظف: {emp_name} ({emp_id})"
+    })
+
+    je.insert(ignore_permissions=True)
+
+    # Verify DB existence (Phase 2 Step 3)
+    if not frappe.db.exists("Journal Entry", je.name):
+        return format_tool_response(
+            success=False,
+            operation_id=target_op_id,
+            error="فشل تسجيل القيد في قاعدة البيانات.",
+            message="فشل الحفظ."
+        )
+
+    # 5. Submit if requested (Phase 2 Step 4)
+    if frappe.utils.cint(submit):
+        je.submit()
+        # Verify docstatus = 1 in MariaDB
+        actual_docstatus = frappe.db.get_value("Journal Entry", je.name, "docstatus")
+        if actual_docstatus != 1:
+            return format_tool_response(
+                success=False,
+                doctype="Journal Entry",
+                document_name=je.name,
+                docstatus=actual_docstatus,
+                operation_id=target_op_id,
+                error="فشل ترحيل واعتماد القيد، ما زال بحالة مسودة.",
+                message="لم يكتمل الاعتماد."
+            )
+
+    # Invalidate cache so confirmation cannot be replayed (Phase 4 Step 6)
+    frappe.cache().delete_value(f"pending_fin_op:{target_op_id}")
+    if channel_id:
+        frappe.cache().delete_value(f"latest_channel_pending_op:{channel_id}")
+    frappe.cache().delete_value(f"latest_user_pending_op:{frappe.session.user}")
+
+    doc_url = frappe.utils.get_url_to_form("Journal Entry", je.name)
+
+    action_text = "اعتماد وترحيل" if je.docstatus == 1 else "إنشاء مسودة"
+    success_msg = (
+        f"✅ *تم {action_text} القيد المحاسبي بنجاح في النظام 🧾*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔖 *رقم القيد:* `{je.name}`\n"
+        f"📄 *الحالة:* {'معتمد (Submitted)' if je.docstatus == 1 else 'مسودة (Draft)'}\n"
+        f"👤 *الموظف:* {emp_name} (`{emp_id}`)\n"
+        f"💵 *المبلغ الصافي:* {float(net_exp):,.2f} ريال\n"
+        f"🏛️ *ضريبة القيمة المضافة:* {float(tax_eligible + tax_pending):,.2f} ريال\n"
+        f"💰 *المبلغ الإجمالي:* {float(gross_total):,.2f} ريال\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔗 *رابط المستند المباشر:*\n{doc_url}"
+    )
+
+    return format_tool_response(
+        success=True,
+        doctype="Journal Entry",
+        document_name=je.name,
+        docstatus=je.docstatus,
+        amount=float(gross_total),
+        employee_id=emp_id,
+        operation_id=target_op_id,
+        document_url=doc_url,
+        message=success_msg,
+        extra={
+            "net_amount": float(net_exp),
+            "tax_amount": float(tax_eligible + tax_pending),
+            "total_amount": float(gross_total)
+        }
+    )
+
+
+@frappe.whitelist()
+def submit_financial_document(doctype: str, document_name: str) -> dict:
+    """
+    Phase 2 & Phase 4: Explicit submission of an existing draft document.
+    Verifies Frappe user permissions.
+    Verifies docstatus = 1 post-submission.
+    Enqueues WhatsApp notification.
+    Returns standardized response schema with verified Frappe URL.
+    """
+    if not doctype or not document_name:
+        return format_tool_response(
+            success=False,
+            error="يجب تحديد نوع المستند واسمه لاعتماده.",
+            message="المستند غير محدد."
+        )
+
+    if not frappe.db.exists(doctype, document_name):
+        return format_tool_response(
+            success=False,
+            doctype=doctype,
+            document_name=document_name,
+            error=f"المستند {document_name} من نوع {doctype} غير موجود في النظام.",
+            message="المستند غير موجود."
+        )
+
+    from hagag_erp.custody_service import verify_user_authorization
+    if not frappe.has_permission(doctype, "submit") and not verify_user_authorization():
+        return format_tool_response(
+            success=False,
+            doctype=doctype,
+            document_name=document_name,
+            error=f"ليس لديك صلاحية اعتماد المستند {document_name} في ERPNext.",
+            message="🔒 تنبيه أمني: لا تملك صلاحية اعتماد هذا المستند."
+        )
+
+    doc = frappe.get_doc(doctype, document_name)
+    if doc.docstatus == 1:
+        doc_url = frappe.utils.get_url_to_form(doctype, document_name)
+        return format_tool_response(
+            success=True,
+            doctype=doctype,
+            document_name=document_name,
+            docstatus=1,
+            amount=float(getattr(doc, "total_debit", 0.0) or getattr(doc, "grand_total", 0.0) or 0.0),
+            document_url=doc_url,
+            message=f"المستند {document_name} معتمد بالفعل مسبقاً في النظام."
+        )
+
+    if doc.docstatus == 2:
+        return format_tool_response(
+            success=False,
+            doctype=doctype,
+            document_name=document_name,
+            docstatus=2,
+            error=f"المستند {document_name} ملغي في النظام ولا يمكن اعتماده.",
+            message="المستند ملغي."
+        )
+
+    try:
+        doc.submit()
+    except Exception as submit_err:
+        return format_tool_response(
+            success=False,
+            doctype=doctype,
+            document_name=document_name,
+            docstatus=0,
+            error=str(submit_err),
+            message=f"فشل اعتماد المستند: {str(submit_err)}"
+        )
+
+    actual_status = frappe.db.get_value(doctype, document_name, "docstatus")
+    if actual_status != 1:
+        return format_tool_response(
+            success=False,
+            doctype=doctype,
+            document_name=document_name,
+            docstatus=actual_status,
+            error="فشلت عملية الاعتماد ولم تتغير حالة المستند في قاعدة البيانات.",
+            message="لم يكتمل الاعتماد."
+        )
+
+    doc_url = frappe.utils.get_url_to_form(doctype, document_name)
+    tot_amt = float(getattr(doc, "total_debit", 0.0) or getattr(doc, "grand_total", 0.0) or 0.0)
+
+    return format_tool_response(
+        success=True,
+        doctype=doctype,
+        document_name=document_name,
+        docstatus=1,
+        amount=tot_amt,
+        document_url=doc_url,
+        message=f"✅ تم اعتماد المستند {document_name} بنجاح وترحيله دفترياً في النظام.\n🔗 الرابط المباشر:\n{doc_url}"
+    )
 
 
 @frappe.whitelist()

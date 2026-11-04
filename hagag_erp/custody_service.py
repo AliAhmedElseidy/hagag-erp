@@ -1574,6 +1574,18 @@ def send_custody_whatsapp_notification(
             frappe.logger("custody_notification").warn(f"[SendBlocked] Refusing to notify bot handset: {norm_phone}")
             return {"status": "ignored", "reason": "Target is bot number"}
 
+        # Prevent duplicate WhatsApp notification for the same document
+        if doctype and docname and frappe.db.table_exists("Elsaidy WhatsApp Log"):
+            existing_log = frappe.db.get_value("Elsaidy WhatsApp Log", {
+                "linked_document_type": doctype,
+                "linked_document_name": docname,
+                "direction": "Outgoing",
+                "delivery_status": ["in", ["Sent", "Delivered", "Replied"]]
+            }, "name")
+            if existing_log:
+                frappe.logger("custody_notification").info(f"Skipping duplicate WhatsApp notification for {doctype} {docname}: already recorded in {existing_log}")
+                return {"status": "skipped", "reason": "Already notified", "existing_log": existing_log}
+
         payload = {
             "jid": jid,
             "message": message

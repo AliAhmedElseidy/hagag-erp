@@ -129,6 +129,68 @@ class RavenAgentManager:
 				"Raven AI Functions Error",
 			)
 
+		# Add custom accounting execution & confirmation tools if bot is Accounting
+		try:
+			existing_tool_names = [t.name for t in self.tools]
+			from raven.ai.sdk_tools import create_function_tool
+
+			if "prepare_financial_operation_preview" not in existing_tool_names:
+				t1 = create_function_tool(
+					"prepare_financial_operation_preview",
+					"يعد معاينة مالية ومحاسبية دقيقة لأي عملية (مصروف عهدة، صرف عهدة، سلفة) ويولد معرّف عملية OP-PREV. لا ينشئ أي قيد في النظام.",
+					"hagag_erp.ai_tools.prepare_financial_operation_preview",
+					{
+						"type": "object",
+						"properties": {
+							"operation_type": {"type": "string", "enum": ["custody_expense", "custody_disbursement", "salary_advance"], "description": "نوع المعاملة"},
+							"amount": {"type": "number", "description": "المبلغ الإجمالي بالريال"},
+							"employee": {"type": "string", "description": "الموظف أو رقمه HR-EMP-00001"},
+							"tax_status": {"type": "string", "enum": ["inclusive", "exclusive", "no_tax", "unspecified"], "description": "هل المبلغ شامل الضريبة 15% أم غير شامل"},
+							"has_tax_invoice": {"type": "integer", "enum": [0, 1], "description": "1 إذا كانت تتوفر فاتورة ضريبية نظامية، 0 إن لم تتوفر"},
+							"expense_category": {"type": "string", "description": "نوع المصروف مثل fuel أو maintenance"},
+							"description": {"type": "string", "description": "بيان المصروف"}
+						},
+						"required": ["operation_type", "amount"]
+					}
+				)
+				if t1:
+					self.tools.append(t1)
+
+			if "execute_confirmed_financial_operation" not in existing_tool_names:
+				t2 = create_function_tool(
+					"execute_confirmed_financial_operation",
+					"ينفذ العملية المالية المحاسبية المؤكدة والمعلقة في النظام وينشئ القيد الفعلي ويتحقق من ترحيله بالأستاذ العام (docstatus=1).",
+					"hagag_erp.ai_tools.execute_confirmed_financial_operation",
+					{
+						"type": "object",
+						"properties": {
+							"operation_id": {"type": "string", "description": "معرف العملية المعلقة مثل OP-PREV-XXXX"},
+							"submit": {"type": "integer", "enum": [0, 1], "description": "1 لاعتماد القيد فوراً (موصى به)، 0 للإبقاء كمسودة"}
+						}
+					}
+				)
+				if t2:
+					self.tools.append(t2)
+
+			if "submit_financial_document" not in existing_tool_names:
+				t3 = create_function_tool(
+					"submit_financial_document",
+					"يعتمد ويرحل مستند مالي مسودة موجود فعلياً في ERPNext ويتحقق من docstatus=1 ويرسل إشعار الواتساب.",
+					"hagag_erp.ai_tools.submit_financial_document",
+					{
+						"type": "object",
+						"properties": {
+							"doctype": {"type": "string", "description": "نوع المستند مثل Journal Entry"},
+							"document_name": {"type": "string", "description": "رقم المستند مثل ACC-JV-2026-00014"}
+						},
+						"required": ["doctype", "document_name"]
+					}
+				)
+				if t3:
+					self.tools.append(t3)
+		except Exception as e:
+			frappe.log_error(f"Error adding custom accounting tools to Raven: {e}", "Raven Tools Setup")
+
 		# Add file search tool if enabled for OpenAI
 		if (
 			hasattr(self.bot_doc, "enable_file_search")
@@ -463,6 +525,38 @@ async def handle_ai_request_async(
 ):
 	"""Handle AI request asynchronously"""
 	try:
+		# Proactive Confirmation Interception (Phase 4)
+		clean_msg = (message or "").strip().lower()
+		is_confirm = any(k in clean_msg for k in ["أكد", "اكيد", "أكيد", "اعتمد", "تاكيد", "تأكيد"]) or "op-prev-" in clean_msg
+		target_op_id = None
+		if is_confirm:
+			op_m = re.search(r"OP-PREV-[A-Za-z0-9\-_]+", message, re.IGNORECASE)
+			if op_m:
+				target_op_id = op_m.group(0).upper()
+			elif channel_id:
+				target_op_id = frappe.cache().get_value(f"latest_channel_pending_op:{channel_id}")
+				if target_op_id and isinstance(target_op_id, bytes):
+					target_op_id = target_op_id.decode("utf-8")
+			if not target_op_id:
+				target_op_id = frappe.cache().get_value(f"latest_user_pending_op:{frappe.session.user}")
+				if target_op_id and isinstance(target_op_id, bytes):
+					target_op_id = target_op_id.decode("utf-8")
+
+		if is_confirm and target_op_id:
+			from hagag_erp.ai_tools import execute_confirmed_financial_operation
+			exec_res = execute_confirmed_financial_operation(operation_id=target_op_id, channel_id=channel_id, submit=1)
+			if exec_res.get("success"):
+				return {
+					"response": exec_res.get("message"),
+					"success": True,
+					"provider": bot.model_provider if hasattr(bot, "model_provider") else "OpenAI",
+				}
+			elif exec_res.get("error"):
+				return {
+					"response": f"⚠️ {exec_res.get('error') or exec_res.get('message')}",
+					"success": True,
+					"provider": bot.model_provider if hasattr(bot, "model_provider") else "OpenAI",
+				}
 
 		manager = RavenAgentManager(bot, file_handler=file_handler)
 
@@ -557,13 +651,13 @@ async def handle_ai_request_async(
 					# Add instruction to encourage immediate tool use & anti-duplication
 					enhanced_instructions = (
 						agent.instructions
-						+ "\n\nCRITICAL ACCOUNTING & ANTI-DUPLICATION INSTRUCTIONS:\n"
-						+ "1. IDEMPOTENCY: Under no circumstances should you re-execute financial transactions (disbursements, custody entries, expenses) that were discussed or executed in earlier messages in the conversation history. Only execute a transaction if it is newly, explicitly requested in the latest user message.\n"
-						+ "2. BALANCE INQUIRIES: When the user asks for balance, report, or status, ONLY call get_gl_balance or get_employee_custody_report. NEVER create a Journal Entry or expense document for a balance inquiry!\n"
-						+ "3. OPERATIONAL CUSTODY (Intent 1): When disbursing custody (e.g. اصرف عهدة 500 ريال لعلي الصعيدي), create Journal Entry with Debit: 1120 (عهد نقدية) and Party Type='Employee', Party=employee_id, Credit: 1110 (نقد).\n"
-						+ "4. CUSTODY EXPENSE SETTLEMENT (Intent 2): When settling expense from custody (e.g. سجل فاتورة بنزين 230 ريال من عهدة علي الصعيدي), Debit: 5120 (مصروف), Debit: 1510 (VAT 15% if commercial/valid), Credit: 1120 (عهد نقدية) with Party Type='Employee', Party=employee_id. NEVER create a custody disbursement when recording an expense!\n"
-						+ "5. PERSONAL ADVANCE (Intent 3): When disbursing a personal salary advance, Debit: 1610 (سلف الموظفين) with Party Type='Employee', Party=employee_id, Credit: 1110.\n"
-						+ "6. Keep responses brief, professional, and in Arabic."
+						+ "\n\nCRITICAL GOVERNANCE & ACCOUNTING INSTRUCTIONS:\n"
+						+ "1. MANDATORY REAL TOOL EXECUTION: You are FORBIDDEN from stating that a Journal Entry, expense, or invoice was created or submitted unless you received a real Function Tool result with success=True, document_name, and document_url. NEVER invent or guess document numbers (like ACC-JV-2026-00006) or URLs!\n"
+						+ "2. ZERO TAX ASSUMPTION: NEVER assume that an invoice amount includes 15% VAT automatically. If the user asks to record an expense without specifying whether it is inclusive or exclusive, or if tax invoice validity is missing, you MUST ask for clarification using prepare_financial_operation_preview or ask directly before creating any document!\n"
+						+ "3. PREVIEW & CONFIRMATION: When user asks to record an expense or disbursement, call prepare_financial_operation_preview to show the dry-run simulation and get an OP-PREV operation ID. When the user confirms with 'أكد' or 'اعتمد', call execute_confirmed_financial_operation!\n"
+						+ "4. BALANCE INQUIRIES: When user asks for balance, report, or status, you MUST call get_employee_custody_report(employee=...) or get_gl_balance. NEVER guess or invent 0.00!\n"
+						+ "5. SUBMISSIONS: To submit an existing draft document, call submit_financial_document(doctype, document_name).\n"
+						+ "6. KEEP RESPONSES BRIEF, PROFESSIONAL, AND IN ARABIC."
 					)
 
 					# Build messages array with proper conversation history (plain string content for Gemini OpenAI API)
@@ -671,6 +765,25 @@ async def handle_ai_request_async(
 						raw_response = "\n\n".join(executed_tool_messages)
 					elif not raw_response and choice and hasattr(choice, "message"):
 						raw_response = choice.message.content
+
+					# Anti-Hallucination & Document Existence Verification (Phase 2 Step 3 & 6)
+					if raw_response:
+						jv_matches = set(re.findall(r"ACC-JV-\d{4}-\d+", raw_response))
+						hallucinated = [jv for jv in jv_matches if not frappe.db.exists("Journal Entry", jv)]
+						if hallucinated:
+							frappe.log_error(
+								f"Blocked Raven hallucinated Journal Entries {hallucinated} for prompt: {message}",
+								"Raven Hallucination Guard"
+							)
+							if executed_tool_messages:
+								raw_response = "\n\n".join(executed_tool_messages)
+							else:
+								raw_response = (
+									f"⚠️ *تنبيه حوكمة وضبط مالي:*\n"
+									f"لم يتم العثور في سجلات النظام على قيد اليومية المذكور ({', '.join(hallucinated)}).\n"
+									f"لا يقوم النظام بإنشاء أي قيد مالي إلا بعد طلب المعاينة أولاً، ثم تأكيد العملية ليتم إنشاؤها واعتمادها عبر الأداة المحاسبية المعتمدة.\n"
+									f"يرجى تحديد تفاصيل العملية (المبلغ، الموظف، المعالجة الضريبية) لبدء المعاينة."
+								)
 
 					# Check for custom <tool_call> format in the response
 					if raw_response and "<tool_call>" in raw_response and "</tool_call>" in raw_response:

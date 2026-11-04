@@ -915,11 +915,13 @@ def send_baileys_reply(jid: str, text: str, quoted_msg_id: str = None) -> dict:
 			)
 			return {"status": "ignored", "reason": "Recipient not in active allowlist"}
 	else:
-		is_allowed_group = frappe.db.sql("""
-			SELECT 1 FROM `tabElsaidy WhatsApp Allowed Group`
-			WHERE is_active = 1 AND group_jid = %s
-			LIMIT 1
-		""", (clean_jid,))
+		is_allowed_group = False
+		if frappe.db.table_exists("Elsaidy WhatsApp Group Rule"):
+			is_allowed_group = bool(frappe.db.sql("""
+				SELECT 1 FROM `tabElsaidy WhatsApp Group Rule`
+				WHERE is_active = 1 AND group_jid = %s
+				LIMIT 1
+			""", (clean_jid,)))
 		if not is_allowed_group:
 			frappe.logger("whatsapp_security").error(
 				f"[SendBlocked] Strict allowlist blocked outgoing reply to unauthorized group: {clean_jid}"
@@ -1071,11 +1073,13 @@ def receive_baileys_event():
 	group_rule = None
 
 	if is_group:
-		matching_groups = frappe.db.sql("""
-			SELECT * FROM `tabElsaidy WhatsApp Allowed Group`
-			WHERE is_active = 1 AND group_jid = %s
-			LIMIT 1
-		""", (group_jid,), as_dict=True)
+		matching_groups = []
+		if frappe.db.table_exists("Elsaidy WhatsApp Group Rule"):
+			matching_groups = frappe.db.sql("""
+				SELECT * FROM `tabElsaidy WhatsApp Group Rule`
+				WHERE is_active = 1 AND group_jid = %s
+				LIMIT 1
+			""", (group_jid,), as_dict=True)
 
 		if not matching_groups:
 			log_doc.status = "Ignored"

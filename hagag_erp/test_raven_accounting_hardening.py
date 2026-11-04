@@ -21,6 +21,11 @@ def run_tests():
     print("============================================================")
     results = {}
 
+    # Initial Draft Cleanup for clean test slate
+    for djv in frappe.get_all("Journal Entry", filters={"docstatus": 0}):
+        frappe.delete_doc("Journal Entry", djv.name, ignore_permissions=True, force=True)
+    frappe.db.commit()
+
     # ──────────────────────────────────────────────────────────
     # Test 1: Real Balance Query Verification (Reference = 270 SAR)
     # ──────────────────────────────────────────────────────────

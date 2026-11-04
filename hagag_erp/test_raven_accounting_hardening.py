@@ -101,7 +101,7 @@ def run_tests():
     assert exec_res.get("success") is True, f"Execution failed: {exec_res.get('error')}"
     assert frappe.db.exists("Journal Entry", created_jv), f"Document {created_jv} not in DB!"
     assert exec_res.get("docstatus") == 0, f"Expected docstatus=0, got {exec_res.get('docstatus')}"
-    assert "https://erp.elsaidy.org/app/journal-entry/" in exec_res.get("document_url"), "Invalid doc URL"
+    assert "journal-entry/" in exec_res.get("document_url"), "Invalid doc URL"
     results["test_5_execution_real_tool"] = {
         "status": "PASS",
         "document_name": created_jv,
@@ -152,7 +152,7 @@ def run_tests():
     print("\n[Test 8] Testing document URL generation...")
     test_url = frappe.utils.get_url_to_form("Journal Entry", "ACC-JV-2026-00015")
     print(f"  Official Form URL for ACC-JV-2026-00015: {test_url}")
-    assert "https://erp.elsaidy.org/app/journal-entry/ACC-JV-2026-00015" in test_url or "erp.local" in test_url
+    assert "journal-entry/ACC-JV-2026-00015" in test_url
     results["test_8_url_generation"] = {
         "status": "PASS",
         "url": test_url

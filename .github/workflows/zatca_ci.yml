@@ -1,0 +1,37 @@
+name: ZATCA CI
+
+on:
+  push:
+    branches:
+      - main
+      - feature/lavaloon-zatca-integration
+  pull_request:
+    branches:
+      - main
+      - feature/lavaloon-zatca-integration
+
+jobs:
+  zatca-pure-tests:
+    name: Pure ZATCA & Contracting Tax Engine Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Test Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install cryptography lxml qrcode
+
+      - name: Validate Dependency Manifest
+        run: |
+          python -c "import json; d=json.load(open('zatca_dependencies.json')); assert d['evaluated_version'] == '0.62.0'; print('Manifest validated: LavaLoon v0.62.0 pinned at ' + d['pinned_commit'])"
+
+      - name: Run Pure ZATCA Unit Tests
+        run: |
+          python hagag_erp/tests_zatca_integration.py

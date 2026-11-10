@@ -1,0 +1,31 @@
+FROM custom:47
+
+USER root
+
+# Install OpenJDK 11 Headless for ZATCA CLI execution
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    default-jre-headless \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pre-create and permission persistent directories
+RUN mkdir -p /home/frappe/frappe-bench/zatca-files /home/frappe/frappe-bench/zatca-tools \
+    && chown -R frappe:frappe /home/frappe/frappe-bench/zatca-files /home/frappe/frappe-bench/zatca-tools \
+    && chmod -R 775 /home/frappe/frappe-bench/zatca-files /home/frappe/frappe-bench/zatca-tools
+
+USER frappe
+
+# Clone and install pinned LavaLoon KSA Compliance
+RUN if [ ! -d "/home/frappe/frappe-bench/apps/ksa_compliance" ]; then \
+        git clone https://github.com/lavaloon-eg/ksa_compliance.git /home/frappe/frappe-bench/apps/ksa_compliance; \
+    fi \
+    && cd /home/frappe/frappe-bench/apps/ksa_compliance \
+    && git checkout 39a3817e098e98066af2c1539d6ad6ed18ad0225 \
+    && /home/frappe/frappe-bench/env/bin/pip install --no-cache-dir -e /home/frappe/frappe-bench/apps/ksa_compliance
+
+# Build frontend assets for both apps
+RUN cd /home/frappe/frappe-bench \
+    && bench build --app ksa_compliance --app hagag_erp
+
+# Declared volumes for cryptographic certificates and tools persistence
+VOLUME /home/frappe/frappe-bench/zatca-files /home/frappe/frappe-bench/zatca-tools

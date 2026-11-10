@@ -514,3 +514,18 @@ def calculate_ipc_tax_breakdown(
         "time_of_supply_rule": tos_code,
         "time_of_supply_description": time_of_supply_desc
     }
+
+
+def calculate_contracting_ipc_tax_base(work_done_amount, advance_recovery_amount=0.0, retention_pct=10.0, contract_type="عقد تجاري خاص"):
+    """Alias for calculate_ipc_tax_breakdown to support contracting tax base queries."""
+    return calculate_ipc_tax_breakdown(
+        work_completed_amount=work_done_amount,
+        advance_recovery_amount=advance_recovery_amount,
+        retention_pct=retention_pct,
+        contract_type=contract_type
+    )
+
+
+def validate_input_vat_deductibility(doc, method=None):
+    """Alias for validate_tax_review_before_submit for Article 50 input tax review."""
+    return validate_tax_review_before_submit(doc, method=method)

@@ -1065,8 +1065,8 @@ def sync_saudi_print_formats():
         <div class="company-meta">
             <h2>شركة ركن سبل الأفق للمقاولات <span style="font-size: 13px; color: #d97706;">(Elsaidy Contracting)</span></h2>
             <div>
-                <span class="badge-id">سجل تجاري (CR): 1010000000</span>
-                <span class="badge-id">الرقم الضريبي (VAT ID): 300000000000003</span>
+                <span class="badge-id">سجل تجاري (CR): {{ frappe.db.get_value('Company', doc.company, 'registration_details') or '-' }}</span>
+                <span class="badge-id">الرقم الضريبي (VAT ID): {{ frappe.db.get_value('Company', doc.company, 'tax_id') or '-' }}</span>
             </div>
             <div style="font-size: 11px; color: #64748b; margin-top: 4px;">المملكة العربية السعودية - الرياض | هاتف: +966569589664</div>
         </div>
@@ -1145,7 +1145,7 @@ def sync_saudi_print_formats():
     </div>
 
     <div style="margin-top: 15px; padding: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 11px;">
-        <strong>الحساب البنكي المعتمد:</strong> البنك الأهلي السعودي (SNB) | الآيبان: SA0000000000000000000000 | باسم: شركة ركن سبل الأفق للمقاولات
+        <strong>الحساب البنكي المعتمد:</strong> الحساب الرسمي باسم {{ frappe.db.get_value('Company', doc.company, 'company_name') or doc.company }}
     </div>
 
     <div class="signatures-grid">
@@ -1278,7 +1278,7 @@ def sync_saudi_print_formats():
         <div>
             <h2 style="margin: 0; color: #1e3a8a; font-weight: 800; font-size: 22px;">شركة ركن سبل الأفق للمقاولات</h2>
             <div style="color: #d97706; font-weight: 700; font-size: 13px;">قطاع المشروعات والتنفيذ الإنشائي | Elsaidy Contracting</div>
-            <div style="font-size: 11px; color: #64748b; margin-top: 3px;">سجل تجاري: 1010000000 | الرقم الضريبي: 300000000000003</div>
+            <div style="font-size: 11px; color: #64748b; margin-top: 3px;">سجل تجاري: {{ frappe.db.get_value('Company', doc.company, 'registration_details') or '-' }} | الرقم الضريبي: {{ frappe.db.get_value('Company', doc.company, 'tax_id') or '-' }}</div>
         </div>
         <div style="text-align: left;">
             <div style="font-size: 14px; font-weight: 800; color: #1e3a8a;">رقم المستخلص: {{ doc.custom_ipc_number or doc.name }}</div>

@@ -1,7 +1,7 @@
 import json
 import os
-import frappe
 
+import frappe
 
 CUSTOM_FUNCTIONS = [
     {
@@ -1902,7 +1902,7 @@ def sync_raven_patch():
     target_file = "/home/frappe/frappe-bench/apps/raven/raven/ai/agents_integration.py"
     if os.path.exists(patch_file) and os.path.exists(target_file):
         try:
-            with open(patch_file, "r", encoding="utf-8") as f:
+            with open(patch_file, encoding="utf-8") as f:
                 content = f.read()
             with open(target_file, "w", encoding="utf-8") as f:
                 f.write(content)

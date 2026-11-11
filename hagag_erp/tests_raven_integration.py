@@ -22,7 +22,7 @@ from frappe.tests.utils import FrappeTestCase
 
 # Check if real Raven app is installed
 try:
-	import raven  # noqa: F401
+	import raven
 
 	HAS_RAVEN = True
 except ImportError:
@@ -38,9 +38,6 @@ class TestRavenIntegration(FrappeTestCase):
 
 	def test_01_no_vendor_file_writes(self):
 		"""Ensures no operation ever attempts to open or write to vendor files in apps/raven."""
-		vendor_raven_dir = os.path.abspath(
-			os.path.join(frappe.get_app_path("hagag_erp"), "..", "..", "raven")
-		)
 		recorded_writes = []
 
 		original_open = open
@@ -48,7 +45,9 @@ class TestRavenIntegration(FrappeTestCase):
 		def guard_open(file, *args, **kwargs):
 			mode = args[0] if args else kwargs.get("mode", "r")
 			path_str = str(file)
-			if any(m in mode for m in ["w", "a", "+", "x"]) and ("apps/raven" in path_str or "raven/ai" in path_str):
+			if any(m in mode for m in ["w", "a", "+", "x"]) and (
+				"apps/raven" in path_str or "raven/ai" in path_str
+			):
 				recorded_writes.append((path_str, mode))
 				raise PermissionError(f"Prohibited write to vendor file: {path_str}")
 			return original_open(file, *args, **kwargs)
@@ -56,9 +55,12 @@ class TestRavenIntegration(FrappeTestCase):
 		with patch("builtins.open", side_effect=guard_open):
 			# Test that setup/extension operations do not trigger vendor writes
 			from hagag_erp.setup import sync_raven_patch
+
 			sync_raven_patch()
 
-		self.assertEqual(len(recorded_writes), 0, f"Detected prohibited writes to vendor files: {recorded_writes}")
+		self.assertEqual(
+			len(recorded_writes), 0, f"Detected prohibited writes to vendor files: {recorded_writes}"
+		)
 
 	def test_02_fresh_process_startup_isolation(self):
 		"""
@@ -99,6 +101,7 @@ class TestRavenIntegration(FrappeTestCase):
 		# Check that raven_message imports handle_bot_dm cleanly
 		try:
 			from raven.ai.ai import handle_bot_dm
+
 			self.assertTrue(callable(handle_bot_dm))
 		except ImportError as e:
 			self.fail(f"Failed to import handle_bot_dm in worker context: {e}")

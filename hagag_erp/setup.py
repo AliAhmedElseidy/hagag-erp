@@ -3,7 +3,6 @@ import os
 
 import frappe
 
-
 CUSTOM_FUNCTIONS = [
     {
         "name": "get_chart_of_accounts_tree",

@@ -3,14 +3,18 @@ FROM frappe/erpnext:v16.53.0@sha256:b961d69ed3265f44f712f40be58a3e6a22c8662f61a7
 
 USER root
 
-# Install dependencies and Adoptium Eclipse Temurin OpenJDK 11 JRE
+# Install dependencies and Adoptium Eclipse Temurin OpenJDK 11 JRE with SHA256 verification
+# Official upstream SHA256: 84cd7101f39172a4db085fb52940595bb14dad6bc3afb5bf82ee497eceaf86d3
 # Note: Debian 12/13 Bookworm/Trixie packages default-jre to OpenJDK 17; ZATCA CLI 2.10.0 strictly requires Java 11.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     ca-certificates \
     git \
     && mkdir -p /opt/java/temurin-11 \
-    && wget -qO- https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.25%2B9/OpenJDK11U-jre_x64_linux_hotspot_11.0.25_9.tar.gz | tar -xzf - -C /opt/java/temurin-11 --strip-components=1 \
+    && wget -q https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.25%2B9/OpenJDK11U-jre_x64_linux_hotspot_11.0.25_9.tar.gz -O /tmp/temurin11.tar.gz \
+    && echo "84cd7101f39172a4db085fb52940595bb14dad6bc3afb5bf82ee497eceaf86d3  /tmp/temurin11.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/temurin11.tar.gz -C /opt/java/temurin-11 --strip-components=1 \
+    && rm -f /tmp/temurin11.tar.gz \
     && ln -s /opt/java/temurin-11/bin/java /usr/local/bin/java \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 

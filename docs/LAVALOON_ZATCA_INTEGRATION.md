@@ -71,10 +71,10 @@ To eliminate local machine dependencies and prevent environmental drift:
    `frappe/erpnext:v16.53.0@sha256:b961d69ed3265f44f712f40be58a3e6a22c8662f61a7e1a8097765534e3e9be2`
    (Guarantees zero reliance on local `custom:47` artifacts).
 
-2. **Strict Java 11 JRE Requirement**:
+2. **Strict Java 11 JRE Requirement & Cryptographic SHA256 Checksum**:
    - Debian 12 (Bookworm) and Debian 13 (Trixie) default packages map `default-jre-headless` to **OpenJDK 17**.
    - ZATCA CLI 2.10.0 strictly requires **Java 11**; running on Java 17 produces cryptographic signature and XML canonicalization discrepancies.
-   - **Solution**: Explicitly installs Adoptium Eclipse Temurin OpenJDK 11.0.25+9 JRE in `/opt/java/temurin-11` and symlinks to `/usr/local/bin/java`. Verified via `java -version`:
+   - **Solution**: Explicitly installs Adoptium Eclipse Temurin OpenJDK 11.0.25+9 JRE in `/opt/java/temurin-11` verified against official upstream SHA256 (`84cd7101f39172a4db085fb52940595bb14dad6bc3afb5bf82ee497eceaf86d3`), symlinked to `/usr/local/bin/java`. Verified via `java -version`:
      `openjdk version "11.0.25" 2024-10-15`
      `OpenJDK Runtime Environment Temurin-11.0.25+9`
 
@@ -85,10 +85,11 @@ To eliminate local machine dependencies and prevent environmental drift:
 
 ### 6. Linter & Code Quality Standards
 - **PR Scope Isolation**: All new and modified integration files (`tests_zatca_integration.py`, `tax_engine.py`, `ops/Dockerfile.zatca`) strictly conform to Frappe tab indentation standards and PEP 8 / Ruff linting rules.
+- **Changed-Files Quality Gate**: `.github/workflows/linter.yml` executes `pre-commit` specifically on the PR git diff range (`--from-ref <base> --to-ref <head>`), ensuring new code meets standards without failing CI on unrelated legacy files.
 - **Legacy Technical Debt Isolation**:
   - Run `42925673248` failed due to legacy repository formatting issues in `wa-baileys-index.js` (Prettier quote rules in `.pre-commit-config.yaml`).
   - To prevent destabilizing the production WhatsApp/Baileys microservice, legacy files were not arbitrarily reformatted.
-  - Documented in detail in GitHub Issue: [#5 - Track legacy formatting debt in wa-baileys-index.js](https://github.com/AliAhmedElseidy/hagag-erp/issues/5).
+  - Documented in detail in GitHub Issue: [#5 - Track legacy formatting debt in wa-baileys-index.js](https://github.com/AliAhmedElseidy/hagag-erp/issues/5). Manual full-repository audits remain available via `workflow_dispatch`.
 
 ---
 
@@ -112,3 +113,25 @@ To eliminate local machine dependencies and prevent environmental drift:
 >
 > **Mandatory Pre-Production Requirement**:
 > Prior to executing deployment on the live production site (`erp.local`), a full dry-run deployment must be executed on a dedicated, completely isolated Docker staging stack (independent MariaDB daemon, Redis containers, and isolated volumes) to guarantee zero interference with production services.
+
+---
+
+### 9. CRITICAL PRODUCTION DEPLOYMENT BLOCKER: Raven Core File Overwrite Risk
+> **🛑 HARD DEPLOYMENT BLOCKER**:
+> `hooks.py` defines `after_migrate = "hagag_erp.setup.sync_elsaidy_customizations"`, which executes `sync_raven_patch()` on every `bench migrate`.
+> `sync_raven_patch()` directly overwrites `/home/frappe/frappe-bench/apps/raven/raven/ai/agents_integration.py` with `hagag_erp/raven_patch.py`.
+
+#### Risk Assessment:
+1. Overwriting vendor Core files in `apps/raven` breaks on upstream Raven updates and violates the strict architectural policy: *Zero modifications to ERPNext, Frappe, Raven, or LavaLoon vendor core files*.
+2. Running `bench migrate` in production will continuously clobber Raven's code, creating acute regression risks for live AI chat workflows.
+
+#### Mandatory Governance & Deployment Rules:
+- **STRICT FREEZE**: Do NOT run `bench --site erp.local migrate` on the production server while this hook exists.
+- **NO LIVE TAMPERING**: Do not alter the live Raven installation or remove the existing patch without an approved, tested replacement.
+- **SEPARATE WORKSTREAM**: Keep PR #4 focused strictly on ZATCA Phase 2 compliance. Do NOT mix Raven refactoring into PR #4.
+
+#### Remediation Plan (Dedicated Milestone):
+1. Audit custom modifications inside `hagag_erp/raven_patch.py` (multi-turn handling & Jinja templating).
+2. Migrate modifications to supported extension interfaces (e.g. standard Frappe hook overrides, subclassing, or monkeypatching via Python entrypoints).
+3. Test thoroughly in an isolated staging environment.
+4. Safely deprecate and remove `sync_raven_patch()` from `sync_elsaidy_customizations()`.

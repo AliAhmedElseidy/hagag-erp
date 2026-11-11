@@ -135,15 +135,11 @@ class TestRavenIntegration(FrappeTestCase):
 		"""
 		from hagag_erp.ai_tools import submit_financial_document
 
-		# Switch to a guest or unauthorized context
-		current_user = frappe.session.user
-		try:
-			frappe.set_user("Guest")
+		# Switch to an unauthorized context via session mock
+		with patch.object(frappe.session, "user", "Guest"):
 			res = submit_financial_document("Journal Entry", "NON-EXISTENT-JV")
 			# Must fail permission or not-found without throwing uncaught 500
 			self.assertFalse(res.get("success"))
-		finally:
-			frappe.set_user(current_user)
 
 	def test_07_no_duplicate_accounting_actions(self):
 		"""

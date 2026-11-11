@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Elsaidy ERP - Central Saudi ZATCA Tax & Contracting Engine
 ===========================================================
@@ -9,7 +8,8 @@ and Contracting Sector Guidelines (IPCs, Retention & Advance Payments).
 Engineered with Decimal precision (0.01 SAR) using ROUND_HALF_UP.
 """
 
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
+
 import frappe
 from frappe import _
 
@@ -357,7 +357,7 @@ def create_draft_journal_entry(
     """
     Creates a balanced Draft Journal Entry (docstatus = 0) with idempotency protection.
     """
-    comp, curr = get_target_company(company)
+    comp, _curr = get_target_company(company)
     if not accounts_data or not isinstance(accounts_data, list):
         raise ValueError("accounts_data must be a non-empty list of dicts")
 

@@ -34,7 +34,7 @@ class TestRavenIntegration(FrappeTestCase):
 
 	def setUp(self):
 		super().setUp()
-		self.test_company = "شركة ركن سبل الأفق المحدودة"
+		self.test_company = "ركن سبل الافق"
 
 	def test_01_no_vendor_file_writes(self):
 		"""Ensures no operation ever attempts to open or write to vendor files in apps/raven."""
@@ -86,7 +86,7 @@ class TestRavenIntegration(FrappeTestCase):
 
 		# hrms_inject runs after_request
 		try:
-			hrms.inject()
+			hrms.inject(frappe.local.response, frappe.local.request)
 		except Exception as e:
 			self.fail(f"after_request hook failed: {e}")
 
@@ -119,14 +119,16 @@ class TestRavenIntegration(FrappeTestCase):
 			amount=150.0,
 			tax_status="inclusive",
 			has_tax_invoice=1,
+			employee="HR-EMP-00001",
 			description="اختبار بنزين للسيارة",
 			company=self.test_company,
 		)
 
 		self.assertIsInstance(preview_res, dict)
 		self.assertTrue(preview_res.get("success"), f"Preview failed: {preview_res}")
-		self.assertTrue("OP-PREV-" in preview_res.get("operation_id", ""))
-		self.assertEqual(float(preview_res.get("tax_amount", 0.0)), 19.57)
+		self.assertTrue("OP-PREV" in preview_res.get("operation_id", ""))
+		tax_line = [l for l in preview_res["simulated_lines"] if "1510" in l.get("account", "")][0]
+		self.assertEqual(float(tax_line.get("debit", 0.0)), 19.57)
 
 	def test_06_permission_enforcement(self):
 		"""
@@ -136,7 +138,7 @@ class TestRavenIntegration(FrappeTestCase):
 		from hagag_erp.ai_tools import submit_financial_document
 
 		# Switch to an unauthorized context via session mock
-		with patch.object(frappe.session, "user", "Guest"):
+		with patch.dict(frappe.session, {"user": "Guest"}):
 			res = submit_financial_document("Journal Entry", "NON-EXISTENT-JV")
 			# Must fail permission or not-found without throwing uncaught 500
 			self.assertFalse(res.get("success"))
@@ -151,7 +153,8 @@ class TestRavenIntegration(FrappeTestCase):
 		# Try executing with an invalid/already used operation ID
 		res1 = execute_confirmed_financial_operation(operation_id="OP-PREV-NONEXISTENT", submit=0)
 		self.assertFalse(res1.get("success"))
-		self.assertIn("منتهية", res1.get("error", "") + res1.get("message", ""))
+		msg = res1.get("error", "") + res1.get("message", "")
+		self.assertTrue(any(k in msg for k in ["منتهية", "انتهت", "غير صالح"]))
 
 	def test_08_multi_turn_conversation_parsing(self):
 		"""

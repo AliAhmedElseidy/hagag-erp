@@ -573,7 +573,7 @@ def parse_expense_from_text(text: str) -> dict:
 
 	normalized_text = text.translate(ARABIC_TO_ASCII_DIGITS)
 
-	expense_keywords = ["صرف", "دفع", "اشتر", "أشتري", "أشتر", "سدد", "سدّد", "صُرف", "مصاريف", "مدفوع", "اشتريت", "دفعت", "صرفت", "فاتورة"]
+	expense_keywords = ["صرف", "دفع", "شراء", "اشتر", "أشتري", "أشتر", "سدد", "سدّد", "صُرف", "مصاريف", "مدفوع", "اشتريت", "دفعت", "صرفت", "فاتورة"]
 	has_keyword = any(kw in normalized_text for kw in expense_keywords)
 	if not has_keyword:
 		return None
@@ -607,7 +607,7 @@ def parse_expense_from_text(text: str) -> dict:
 
 	# Extract vendor if present
 	vendor = None
-	vendor_match = re.search(r"من\s+(شركة|محطة|مورد|مشروع|متجر|محل)?\s*([^\n\.,]+)", normalized_text)
+	vendor_match = re.search(r"من\s+(شركة|مؤسسة|محطة|مورد|مشروع|متجر|محل)?\s*([^\n\.,]+)", normalized_text)
 	if vendor_match:
 		vendor = vendor_match.group(0).strip()
 

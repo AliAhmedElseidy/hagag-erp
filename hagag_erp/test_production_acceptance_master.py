@@ -257,6 +257,7 @@ def run_all_acceptance_tests():
     # ══════════════════════════════════════════════════════════
     # SECTION 3: WHATSAPP HUB & SECURITY ALLOWLIST (6 CHECKS)
     # ══════════════════════════════════════════════════════════
+    frappe.db.commit()
     print("\n--- SECTION 3: WHATSAPP HUB & SECURITY ALLOWLIST ---")
 
     hub = get_hub_settings()

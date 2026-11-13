@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Elsaidy ERP - Central Saudi ZATCA Tax & Contracting Engine
 ===========================================================
@@ -9,7 +8,8 @@ and Contracting Sector Guidelines (IPCs, Retention & Advance Payments).
 Engineered with Decimal precision (0.01 SAR) using ROUND_HALF_UP.
 """
 
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
+
 import frappe
 from frappe import _
 
@@ -36,18 +36,24 @@ def get_target_company(company=None) -> tuple:
         abbr = frappe.db.get_value("Company", company, "abbr")
         return company, abbr
 
-    user_comp = frappe.defaults.get_user_default("company")
+    try:
+        user_comp = frappe.defaults.get_user_default("company")
+    except Exception:
+        user_comp = None
     if user_comp and frappe.db.exists("Company", user_comp):
         abbr = frappe.db.get_value("Company", user_comp, "abbr")
         return user_comp, abbr
 
-    comps = frappe.get_all("Company", fields=["name", "abbr"], limit=10)
-    for c in comps:
-        if "ركن" in c.name or "سبل" in c.name:
-            return c.name, c.abbr
+    try:
+        comps = frappe.get_all("Company", fields=["name", "abbr"], limit=10)
+        for c in comps:
+            if "ركن" in c.name or "سبل" in c.name:
+                return c.name, c.abbr
 
-    if comps:
-        return comps[0].name, comps[0].abbr
+        if comps:
+            return comps[0].name, comps[0].abbr
+    except Exception:
+        pass
 
     return "ركن سبل الافق", "Rkn"
 
@@ -124,7 +130,8 @@ def calculate_zatca_tax(
     is_inclusive=True,
     vat_rate_pct=Decimal("15.00"),
     has_valid_tax_invoice=True,
-    usage_type="commercial"
+    usage_type="commercial",
+    company=None
 ) -> dict:
     """
     Convenience calculation wrapper for ZATCA 15% VAT breakdown.
@@ -137,7 +144,8 @@ def calculate_zatca_tax(
         amount_basis=basis,
         has_valid_tax_invoice=has_valid_tax_invoice,
         usage_type=usage_type,
-        vat_rate_pct=vat_rate_pct
+        vat_rate_pct=vat_rate_pct,
+        company=company
     )
     return {
         "net_amount": res["base_amount"],
@@ -357,7 +365,7 @@ def create_draft_journal_entry(
     """
     Creates a balanced Draft Journal Entry (docstatus = 0) with idempotency protection.
     """
-    comp, curr = get_target_company(company)
+    comp, _curr = get_target_company(company)
     if not accounts_data or not isinstance(accounts_data, list):
         raise ValueError("accounts_data must be a non-empty list of dicts")
 
@@ -377,18 +385,14 @@ def create_draft_journal_entry(
     jv.user_remark = f"[{reference_id}] {user_remark}" if reference_id else (user_remark or "")
 
     for row in accounts_data:
-        acc_dict = {
+        jv.append("accounts", {
             "account": row.get("account"),
             "debit_in_account_currency": frappe.utils.flt(row.get("debit", 0.0)),
             "credit_in_account_currency": frappe.utils.flt(row.get("credit", 0.0)),
             "cost_center": row.get("cost_center"),
             "project": row.get("project"),
             "user_remark": row.get("user_remark")
-        }
-        if row.get("party_type") and row.get("party"):
-            acc_dict["party_type"] = row.get("party_type")
-            acc_dict["party"] = row.get("party")
-        jv.append("accounts", acc_dict)
+        })
 
     jv.flags.ignore_permissions = True
     jv.insert()
@@ -518,3 +522,19 @@ def calculate_ipc_tax_breakdown(
         "time_of_supply_rule": tos_code,
         "time_of_supply_description": time_of_supply_desc
     }
+
+
+def calculate_contracting_ipc_tax_base(work_done_amount, advance_recovery_amount=0.0, retention_pct=10.0, contract_type="عقد تجاري خاص"):
+    """Alias for calculate_ipc_tax_breakdown to support contracting tax base queries."""
+    return calculate_ipc_tax_breakdown(
+        work_completed_amount=work_done_amount,
+        advance_recovery_amount=advance_recovery_amount,
+        retention_pct=retention_pct,
+        contract_type=contract_type
+    )
+
+
+def validate_input_vat_deductibility(doc, method=None):
+    """Alias for validate_tax_review_before_submit for Article 50 input tax review."""
+    return validate_tax_review_before_submit(doc, method=method)
+

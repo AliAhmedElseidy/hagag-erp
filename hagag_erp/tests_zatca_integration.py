@@ -29,6 +29,26 @@ for p in [parent_dir, current_dir]:
 
 try:
 	import frappe
+
+	if hasattr(frappe, "throw"):
+		_orig_throw = frappe.throw
+
+		def _safe_throw(msg, exc=frappe.ValidationError, *args, **kwargs):
+			if not getattr(getattr(frappe, "local", None), "site", None):
+				raise exc(msg)
+			return _orig_throw(msg, exc, *args, **kwargs)
+
+		frappe.throw = _safe_throw
+
+	if hasattr(frappe, "_"):
+		_orig_trans = frappe._
+
+		def _safe_trans(msg, *args, **kwargs):
+			if not getattr(getattr(frappe, "local", None), "site", None):
+				return msg
+			return _orig_trans(msg, *args, **kwargs)
+
+		frappe._ = _safe_trans
 except ImportError:
 
 	class MockFrappeValidationError(Exception):
@@ -90,6 +110,16 @@ class StrictFrappeDBMock:
 				if fieldname == "abbr":
 					return "Rkn"
 				return "ركن سبل الافق"
+		return None
+
+	def get_all(self, doctype, *args, **kwargs):
+		if doctype == "Company":
+			return [{"name": "ركن سبل الافق", "abbr": "Rkn"}]
+		return []
+
+	def get_single_value(self, doctype, fieldname):
+		if doctype == "Global Defaults" and fieldname == "default_company":
+			return "ركن سبل الافق"
 		return None
 
 
@@ -160,10 +190,12 @@ def test_rounding_precision():
 
 def test_zatca_tax_calculation():
 	"""Verify base tax calculation and gross total computation."""
-	tax = calculate_zatca_tax(Decimal("1000.00"), is_inclusive=False, vat_rate_pct=Decimal("15.00"))
-	assert tax["net_amount"] == Decimal("1000.00"), f"Expected 1000, got {tax['net_amount']}"
-	assert tax["tax_amount"] == Decimal("150.00"), f"Expected 150, got {tax['tax_amount']}"
-	assert tax["total_amount"] == Decimal("1150.00"), f"Expected 1150, got {tax['total_amount']}"
+	mock_db = StrictFrappeDBMock()
+	with patch("frappe.db", mock_db):
+		tax = calculate_zatca_tax(Decimal("1000.00"), is_inclusive=False, vat_rate_pct=Decimal("15.00"))
+		assert tax["net_amount"] == Decimal("1000.00"), f"Expected 1000, got {tax['net_amount']}"
+		assert tax["tax_amount"] == Decimal("150.00"), f"Expected 150, got {tax['tax_amount']}"
+		assert tax["total_amount"] == Decimal("1150.00"), f"Expected 1150, got {tax['total_amount']}"
 	return True
 
 

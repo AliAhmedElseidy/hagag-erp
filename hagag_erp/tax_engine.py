@@ -36,18 +36,24 @@ def get_target_company(company=None) -> tuple:
         abbr = frappe.db.get_value("Company", company, "abbr")
         return company, abbr
 
-    user_comp = frappe.defaults.get_user_default("company")
+    try:
+        user_comp = frappe.defaults.get_user_default("company")
+    except Exception:
+        user_comp = None
     if user_comp and frappe.db.exists("Company", user_comp):
         abbr = frappe.db.get_value("Company", user_comp, "abbr")
         return user_comp, abbr
 
-    comps = frappe.get_all("Company", fields=["name", "abbr"], limit=10)
-    for c in comps:
-        if "ركن" in c.name or "سبل" in c.name:
-            return c.name, c.abbr
+    try:
+        comps = frappe.get_all("Company", fields=["name", "abbr"], limit=10)
+        for c in comps:
+            if "ركن" in c.name or "سبل" in c.name:
+                return c.name, c.abbr
 
-    if comps:
-        return comps[0].name, comps[0].abbr
+        if comps:
+            return comps[0].name, comps[0].abbr
+    except Exception:
+        pass
 
     return "ركن سبل الافق", "Rkn"
 
@@ -124,7 +130,8 @@ def calculate_zatca_tax(
     is_inclusive=True,
     vat_rate_pct=Decimal("15.00"),
     has_valid_tax_invoice=True,
-    usage_type="commercial"
+    usage_type="commercial",
+    company=None
 ) -> dict:
     """
     Convenience calculation wrapper for ZATCA 15% VAT breakdown.
@@ -137,7 +144,8 @@ def calculate_zatca_tax(
         amount_basis=basis,
         has_valid_tax_invoice=has_valid_tax_invoice,
         usage_type=usage_type,
-        vat_rate_pct=vat_rate_pct
+        vat_rate_pct=vat_rate_pct,
+        company=company
     )
     return {
         "net_amount": res["base_amount"],

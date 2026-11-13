@@ -15,15 +15,23 @@ jobs:
   linter:
     name: 'Frappe Linter'
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
           cache: pip
+
+      # PR quality gate: lint only changed files in PR to isolate legacy formatting debt (Issue #5).
+      # On manual workflow_dispatch, lints all repository files for maintenance.
       - uses: pre-commit/action@v3.0.0
+        with:
+          extra_args: ${{ github.event_name == 'pull_request' && format('--from-ref {0} --to-ref {1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '--all-files' }}
 
       - name: Download Semgrep rules
         run: git clone --depth 1 https://github.com/frappe/semgrep-rules.git frappe-semgrep-rules

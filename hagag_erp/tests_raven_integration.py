@@ -127,7 +127,7 @@ class TestRavenIntegration(FrappeTestCase):
 		self.assertIsInstance(preview_res, dict)
 		self.assertTrue(preview_res.get("success"), f"Preview failed: {preview_res}")
 		self.assertTrue("OP-PREV" in preview_res.get("operation_id", ""))
-		tax_line = [l for l in preview_res["simulated_lines"] if "1510" in l.get("account", "")][0]
+		tax_line = next(l for l in preview_res["simulated_lines"] if "1510" in l.get("account", ""))
 		self.assertEqual(float(tax_line.get("debit", 0.0)), 19.57)
 
 	def test_06_permission_enforcement(self):

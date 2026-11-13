@@ -1,0 +1,116 @@
+# Elsaidy ERP — Production Deployment & Rollback Guide
+## دليل النشر الآمن وخطة التراجع — نظام الصعيدي للمقاولات
+
+**Target Site:** `erp.local` (`https://erp.elsaidy.org`)  
+**Target Architecture:** Docker Compose + Frappe v16 + ERPNext v16 + Python 3.14  
+**Audience:** Lead Systems Engineer & DevOps  
+
+---
+
+## 1. احتياطات ما قبل النشر (Pre-Deployment Safety Checks)
+
+قبل تنفيذ أي أمر ترحيل أو نشر على الإنتاج:
+1. **التحقق من حالة الحاويات النشطة:**
+   ```bash
+   ssh ali "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
+   ```
+   تأكد من أن الحاويات التالية في حالة `Up`:
+   - `frappe_docker-backend-1`
+   - `frappe_docker-frontend-1`
+   - `frappe_docker-db-1`
+   - `wa-baileys` (منفذ 3001)
+
+2. **أخذ نسخة احتياطية فورية وشاملة (Snapshot Backup):**
+   ```bash
+   ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local backup --with-files"
+   ```
+   تحقق من ظهور ملف النسخة الاحتياطية في المسار:
+   `/var/lib/docker/volumes/frappe_docker_sites/_data/erp.local/private/backups/`
+
+3. **حماية جلسة واتساب ومنع إعادة التشغيل غير الضرورية:**
+   - خدمة `wa-baileys` مستقلة بحاوية منفصلة ولا تتأثر بإعادة تشغيل تطبيق الباك إند.
+   - يمنع تشغيل `docker restart wa-baileys` إلا في حال انقطاع الجلسة الفعلي.
+
+---
+
+## 2. تسلسل الدمج البرمجي الموصى به (PR Merge Sequence)
+
+لتجنب أي تعارض في الملفات المشتركة (`setup.py` و `pyproject.toml`):
+
+1. **دمج PR #6 أولاً (`feature/raven-safe-extension`):**
+   - يلغي تعديل ملفات vendor raven على القرص.
+   - يضيف ملحق الذاكرة `hagag_erp/raven_extension.py`.
+   - يحتوي على حزمة اختبارات Raven الشاملة (8/8 نجاح).
+
+2. **إعادة تأسيس (Rebase) ودمج PR #4 ثانياً (`feature/lavaloon-zatca-integration`):**
+   - يدمج تكامل LavaLoon KSA compliance v0.62.0.
+   - يضيف دالة احتساب مستخلصات المقاولات وحسم الدفعة المقدمة والضريبة.
+   - يضيف صورة Dockerfile.zatca المدعومة بـ Java 11 JRE.
+   - يحتوي على حزمة اختبارات الزكاة البحتة (8/8 نجاح).
+
+---
+
+## 3. خطوات النشر على خادم الإنتاج (Execution Commands)
+
+عند استلام الاعتماد النهائي:
+
+```bash
+# خطوة 1: الدخول إلى مجلد المستودع وجلب أحدث النسخ
+ssh ali "cd /root/frappe_docker/hagag-erp-repo && git fetch origin && git checkout main && git pull origin main"
+
+# خطوة 2: تنفيذ ترحيل قاعدة البيانات بهدوء
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local migrate"
+
+# خطوة 3: بناء الأصول الثابتة لتطبيق المقاولات
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench build --app hagag_erp"
+
+# خطوة 4: مسح الذاكرة المؤقتة لموقع الإنتاج
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local clear-cache"
+
+# خطوة 5: إعادة تشغيل معالجات الطلبات والمهام الخلفية
+ssh ali "docker restart frappe_docker-backend-1 frappe_docker-queue-short-1 frappe_docker-queue-long-1"
+```
+
+---
+
+## 4. التحقق والتوثيق بعد النشر (Post-Deployment Verification)
+
+1. **تشغيل فحص الأستاذ العام الحي (Read-Only GL Balance Check):**
+   ```bash
+   ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local execute hagag_erp.custody_service.get_employee_live_gl_balance --args \"['HR-EMP-00001', 'ركن سبل الافق']\""
+   ```
+   يجب أن يعيد بالضبط: `posted_custody_balance: 2185.0`.
+
+2. **تشغيل اختبارات القبول الشاملة على الإنتاج (23 فحصاً آمناً):**
+   ```bash
+   ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local execute hagag_erp.test_production_acceptance_master.run_all_acceptance_tests"
+   ```
+   يجب أن تعيد: `23/23 PASSED (100%)`.
+
+3. **التحقق من حالة واتساب:**
+   ```bash
+   ssh ali "curl -s -H 'Authorization: Bearer c3feaa802afa03134fc4dfd744fc9fdf2a886759f0ff06ade10bffb559ed43a2' http://localhost:3001/status"
+   ```
+   يجب أن يعيد: `"connected": true`.
+
+---
+
+## 5. خطة التراجع السريع عند الطوارئ (Rollback Procedure)
+
+في حال حدوث أي خطأ غير متوقع أثناء الترحيل:
+
+1. **الرجوع لفرع الكود السابق:**
+   ```bash
+   ssh ali "cd /root/frappe_docker/hagag-erp-repo && git checkout HEAD~1"
+   ```
+
+2. **استعادة قاعدة البيانات من أحدث نسخة احتياطية:**
+   ```bash
+   ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local restore /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup-file-name>.sql.gz --force"
+   ```
+
+3. **إعادة بناء الأصول وإعادة التشغيل:**
+   ```bash
+   ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local clear-cache"
+   ssh ali "docker restart frappe_docker-backend-1 frappe_docker-queue-short-1 frappe_docker-queue-long-1"
+   ```

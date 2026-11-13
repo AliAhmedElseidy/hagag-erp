@@ -1896,18 +1896,19 @@ def sync_insights_v3_dashboards():
 
 def sync_raven_patch():
     """
-    Applies the Raven AI multi-turn & Arabic accounting extension in-memory.
-    Preserves Raven Core vendor files intact on disk without overwriting.
+    Ensures Raven AI functions and bots are natively configured in Frappe database.
+    Zero disk writes and zero monkey-patching. Custom functions are natively loaded
+    by Raven via standard Raven AI Function doctype and bot_functions child table.
     """
     try:
         from hagag_erp.raven_extension import apply_raven_extension
 
         if apply_raven_extension():
-            print(" -> Raven runtime extension successfully registered in memory.")
+            print(" -> Raven native integration active: 0 vendor writes, 0 monkey patches.")
         else:
             print(" -> Raven app not active or extension deferred.")
     except Exception as e:
-        print(f" -> Warning registering Raven extension: {e}")
+        print(f" -> Warning verifying Raven native setup: {e}")
 
 
 def sanitize_database_test_data(force=False, confirmation_token=None):

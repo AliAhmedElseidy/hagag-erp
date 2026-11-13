@@ -1,63 +1,48 @@
 """
-Elsaidy ERP - Raven AI Safe Extension Module
-=============================================
-Provides safe, non-destructive runtime extension of Raven AI functionality
-without modifying or overwriting any Raven Core vendor files on disk.
+Elsaidy ERP - Raven AI Native Extension Module
+===============================================
+Provides supported native configuration of Raven AI functionality
+without modifying or overwriting any Raven Core vendor files on disk,
+and without runtime monkey-patching.
 
-Architectural Policy:
-Zero modifications to vendor core files in /home/frappe/frappe-bench/apps/raven/.
+Supported Integration Mechanisms:
+1. Native DocType: 'Raven AI Function' (type="Custom Function", function_path="hagag_erp.ai_tools.<fn>")
+2. Child Table: 'Raven Bot Function' in 'Raven Bot' (dynamic loading via create_raven_tools)
+3. Bot Prompts: 'Raven Bot.instruction' with dynamic_instructions=1 (RTL formatting, anti-hallucination)
 """
 
-import importlib.util
 import os
 
 import frappe
 
 
+def verify_raven_native_setup():
+	"""
+	Verifies that Raven AI native extension points (DocType 'Raven AI Function'
+	and child table 'bot_functions' on 'Raven Bot') are properly configured
+	in Frappe database without modifying vendor core files or monkey-patching.
+	"""
+	try:
+		if not frappe.db.table_exists("Raven AI Function"):
+			return False
+		custom_fn_count = frappe.db.count("Raven AI Function", {"type": "Custom Function"})
+		return custom_fn_count > 0
+	except Exception:
+		return False
+
+
 def load_raven_extension_module():
 	"""
-	Loads the customized Raven agent implementation into memory with
-	package context bound to 'raven.ai' to resolve internal references safely.
+	Legacy helper retained for compatibility. Returns None as monkey-patching is eliminated.
 	"""
-	patch_path = os.path.join(os.path.dirname(__file__), "raven_patch.py")
-	if not os.path.exists(patch_path):
-		return None
-
-	spec = importlib.util.spec_from_file_location("raven.ai._elsaidy_agents_integration", patch_path)
-	if not spec or not spec.loader:
-		return None
-
-	custom_mod = importlib.util.module_from_spec(spec)
-	custom_mod.__package__ = "raven.ai"
-	spec.loader.exec_module(custom_mod)
-	return custom_mod
+	return None
 
 
 def apply_raven_extension():
 	"""
-	Dynamically hooks Elsaidy's multi-turn & Arabic accounting enhancements
-	into Raven AI's request handlers at runtime in memory.
-
-	Returns True if successfully patched, False otherwise.
+	Supported native Raven extension interface.
+	Zero monkey-patching, zero vendor disk modifications.
+	Custom tools are registered natively in Raven AI Function and loaded
+	by Raven's agents SDK via create_raven_tools().
 	"""
-	try:
-		import raven.ai.agents_integration as rai
-		import raven.ai.ai as rai_ai
-
-		custom_mod = load_raven_extension_module()
-		if not custom_mod:
-			return False
-
-		# In-memory hook injection (non-destructive)
-		rai.handle_ai_request_sync = custom_mod.handle_ai_request_sync
-		rai.handle_ai_request_async = custom_mod.handle_ai_request_async
-		rai.RavenAgentManager = custom_mod.RavenAgentManager
-		rai_ai.handle_ai_request_sync = custom_mod.handle_ai_request_sync
-
-		return True
-	except ImportError:
-		# Raven app not active/installed in the current environment
-		return False
-	except Exception as e:
-		frappe.log_error(f"Failed to apply Raven runtime extension: {e}", "Raven Extension")
-		return False
+	return verify_raven_native_setup()

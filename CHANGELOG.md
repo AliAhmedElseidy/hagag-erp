@@ -16,13 +16,16 @@ All notable changes to the Elsaidy ERP (hagag-erp) platform are documented in th
   - Strict Article 50 input tax recovery rules (commercial heavy equipment fuel vs restricted private vehicles).
   - 8 isolated pure mocked ZATCA unit tests (`hagag_erp/tests_zatca_integration.py`).
   - Automated ZATCA CI workflow (`.github/workflows/zatca_ci.yml`) running on Python 3.14.
-- **Raven AI Safe In-Memory Runtime Extension (PR #6):**
-  - Non-destructive dynamic extension (`hagag_erp/raven_extension.py`) replacing legacy disk-overwriting patches.
+- **Raven AI Native DocType Architecture (PR #6):**
+  - Replaced transient in-memory monkey-patching with native Raven DocTypes (`Raven AI Function` with type `Custom Function` & `Raven Bot.bot_functions`).
   - Zero modifications to vendor core files in `apps/raven` (verified 0 file writes).
-  - Registration of 5 native custom financial functions in `Raven AI Function`.
+  - Multi-process persistence across container restarts and RQ background worker jobs.
   - Comprehensive Raven integration test suite (`hagag_erp/tests_raven_integration.py`) covering request lifecycles, background workers, process isolation, and idempotency.
 - **WhatsApp Hub Command Center:**
   - Baileys Node.js gateway integration (port 3001) with persistent session handling.
+  - Purged all hardcoded API tokens (`HAGAG_WA_7f3c9a2d6e4b8a1c`) across codebase and documentation.
+  - Secure token resolution strictly via encrypted single store (`get_hub_auth_token`) and environment variables.
+  - Successfully rotated exposed WhatsApp Bearer token on live container without dropping active device pairing.
   - Strict allowlist enforcement with silent drop of unauthorized senders.
   - Cloud LID resolution for 1-to-1 chats to eliminate Signal protocol ratchet decryption errors.
   - Notification deduplication protecting against redundant outbound messages.

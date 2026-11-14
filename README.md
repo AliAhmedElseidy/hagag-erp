@@ -75,7 +75,7 @@ graph TD
         Backend --> RedisQueue["Redis Queue (Port 6379)"]
         Backend --> Workers["RQ Background Workers (queue-short / queue-long)"]
         
-        Backend <--> RavenExt["Raven AI In-Memory Safe Extension (apps/raven)"]
+        Backend <--> RavenNative["Raven AI Native Architecture (DocType: Raven AI Function & bot_functions)"]
         Backend <--> ZatcaEngine["LavaLoon KSA Compliance & Tax Engine"]
         ZatcaEngine --> JavaJRE["Adoptium Temurin Java 11 JRE (ZATCA CLI)"]
     end
@@ -146,8 +146,8 @@ graph TD
 
 ## 🤖 المساعد الذكي المحاسبي المستقل (Raven AI)
 
-### المعمارية الآمنة لـ Raven (Safe In-Memory Architecture):
-- **حظر تعديل ملفات البائع:** تم استبدال آلية الكتابة القديمة بملحق برمجي حي في الذاكرة (`hagag_erp/raven_extension.py`) يضمن عدم كتابة حرف واحد في مجلد `apps/raven`.
+### المعمارية الأصيلة والدائمة لـ Raven (Native DocType Architecture):
+- **تكامل أصيل عبر واجهات Frappe و Raven الرسمية:** تم إزالة الترقيع المؤقت في الذاكرة بالكامل واستبداله بتسجيل الأدوات المحاسبية والمالية عبر DocType رسمي (`Raven AI Function` بنوع `Custom Function`) وربطها ديناميكياً بروبوت المحاسبة (`Raven Bot: Accounting`) عبر جدول `bot_functions` وتعليمات البوت. يضمن هذا الحل العمل الدائم عبر كل عمليات العمال (RQ Workers) وإعادة تشغيل الحاويات دون تعديل ملفات البائع إطلاقاً.
 - **الأدوات المالية الخمس المعتمدة رسمياً:**
   1. `get_chart_of_accounts_tree`: استعراض شجرة الحسابات الحية بالأرصدة.
   2. `get_cost_centers_tree`: استعراض شجرة مراكز التكلفة للمشاريع.
@@ -161,7 +161,8 @@ graph TD
 
 ## 📱 مركز عمليات واتساب الميداني (WhatsApp Hub)
 
-- **بوابة Baileys المستقلة:** تعمل في حاوية منفصلة `wa-baileys` على المنفذ الداخلي `3001` مع الحفاظ التام على جلسة الإقران دون انقطاع.
+- **بوابة Baileys المستقلة:** تعمل في حاوية منفصلة `wa-baileys` على المنفذ الداخلي `3001` مع الحفاظ التام على جلسة الإقران النشطة دون انقطاع.
+- **التخزين الآمن والمشفر لرموز API:** إزالة كافة رموز الأمان الثابتة (Hardcoded Tokens) في الكود والوثائق، وتطبيق التوثيق الديناميكي المشفر حصرياً عبر `Elsaidy WhatsApp Hub` مع تدوير الرمز السري الفعلي بأمان.
 - **قائمة السماح الصارمة (Strict Security Allowlist):** لا يستجيب البوت إلا للأرقام المسجلة في جدول `Elsaidy WhatsApp Contact Rule`.
 - **خاصية الإسقاط الصامت (Silent Drop):** أي رسالة واردة من رقم غير مصرح له تسقط في البوابة بصمت مطبق (Zero Response, Zero Data Leak).
 - **منع خطأ تشفير سيجنال (Cloud LID):** حل رقم الهاتف إلى معرّف الجهاز السحابي (LID) للمحادثات الفردية لتجنب خطأ انقسام جلسات التشفير في تطبيق واتساب.

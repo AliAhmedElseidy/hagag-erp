@@ -1,7 +1,7 @@
 import json
 import os
-import frappe
 
+import frappe
 
 CUSTOM_FUNCTIONS = [
     {
@@ -1896,24 +1896,19 @@ def sync_insights_v3_dashboards():
 
 def sync_raven_patch():
     """
-    Ensures Raven's agents_integration.py has the multi-turn & Jinja patch applied.
+    Ensures Raven AI functions and bots are natively configured in Frappe database.
+    Zero disk writes and zero monkey-patching. Custom functions are natively loaded
+    by Raven via standard Raven AI Function doctype and bot_functions child table.
     """
-    patch_file = os.path.join(os.path.dirname(__file__), "raven_patch.py")
-    target_file = "/home/frappe/frappe-bench/apps/raven/raven/ai/agents_integration.py"
-    if os.path.exists(patch_file) and os.path.exists(target_file):
-        try:
-            with open(patch_file, "r", encoding="utf-8") as f:
-                content = f.read()
-            with open(target_file, "w", encoding="utf-8") as f:
-                f.write(content)
-            print(" -> Synchronized Raven patch to live raven app.")
-        except OSError as e:
-            if getattr(e, "errno", None) == 30 or "Read-only" in str(e):
-                print(" -> Raven patch is already active via docker host bind-mount.")
-            else:
-                print(f" -> Warning synchronizing Raven patch: {e}")
-        except Exception as e:
-            print(f" -> Warning synchronizing Raven patch: {e}")
+    try:
+        from hagag_erp.raven_extension import apply_raven_extension
+
+        if apply_raven_extension():
+            print(" -> Raven native integration active: 0 vendor writes, 0 monkey patches.")
+        else:
+            print(" -> Raven app not active or extension deferred.")
+    except Exception as e:
+        print(f" -> Warning verifying Raven native setup: {e}")
 
 
 def sanitize_database_test_data(force=False, confirmation_token=None):

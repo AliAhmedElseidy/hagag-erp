@@ -95,22 +95,39 @@ ssh ali "docker restart frappe_docker-backend-1 frappe_docker-queue-short-1 frap
 
 ---
 
-## 5. خطة التراجع السريع عند الطوارئ (Rollback Procedure)
+## 5. خطة التراجع الآمنة عند الطوارئ (Safe Rollback Procedure)
 
-في حال حدوث أي خطأ غير متوقع أثناء الترحيل:
+> [!CAUTION]
+> **تنبيه أمني هام:** يحظر تشغيل أمر `bench restore ... --force` بدون كلمة مرور root لقاعدة البيانات أو دون تفعيل وضع الصيانة. الاستعادة العشوائية تؤدي إلى إتلاف جلسات العمل ومسح مفتاح التشفير `encryption_key`. التزم بالخطوات الست التالية:
 
-1. **الرجوع لفرع الكود السابق:**
+1. **تفعيل وضع الصيانة فوراً لإيقاف حركة المستخدمين:**
    ```bash
-   ssh ali "cd /root/frappe_docker/hagag-erp-repo && git checkout HEAD~1"
+   ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local set-maintenance-mode on"
    ```
 
-2. **استعادة قاعدة البيانات من أحدث نسخة احتياطية:**
+2. **أخذ لقطة احتياطية طارئة للحالة الحالية قبل بدء التراجع:**
    ```bash
-   ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local restore /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup-file-name>.sql.gz --force"
+   ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local backup --with-files"
    ```
 
-3. **إعادة بناء الأصول وإعادة التشغيل:**
+3. **التحقق من سلامة ملف النسخة الاحتياطية المستهدفة (Integrity Check):**
+   ```bash
+   ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 gzip -t /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_file>.sql.gz"
+   ```
+
+4. **تنفيذ الاستعادة الآمنة مع تمرير كلمة مرور root لقاعدة البيانات وخيارات ملفات النظام:**
+   ```bash
+   ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local restore /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_file>.sql.gz --db-root-password SuperRootP@ss2026 --with-public-files /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_public_files>.tar --with-private-files /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_private_files>.tar --force"
+   ```
+
+5. **الرجوع لفرع أو وسم الكود المستقر السابق:**
+   ```bash
+   ssh ali "cd /root/frappe_docker/hagag-erp-repo && git checkout <stable_tag_or_commit>"
+   ```
+
+6. **تفريغ الكاش وإلغاء وضع الصيانة وإعادة تشغيل معالجات المهام:**
    ```bash
    ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local clear-cache"
+   ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local set-maintenance-mode off"
    ssh ali "docker restart frappe_docker-backend-1 frappe_docker-queue-short-1 frappe_docker-queue-long-1"
    ```

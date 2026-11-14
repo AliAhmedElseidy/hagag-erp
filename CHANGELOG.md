@@ -5,9 +5,18 @@ All notable changes to the Elsaidy ERP (hagag-erp) platform are documented in th
 
 ---
 
-## [16.0.0-Production-Release] - 2026-11-14
+## [16.0.0-rc1] - 2026-11-14
 
 ### Added
+- **Staging Backup & Restore Verification:**
+  - Real database restore executed and verified on staging site (`erp_test.local`) using `bench restore --db-root-password --force`.
+  - Comprehensive post-restore verification with 100% pass rate across ZATCA engine and Raven integration test suites.
+  - Safe 6-step emergency rollback runbook documented across `README.md`, `DEPLOYMENT_GUIDE.md`, and `GO_LIVE_CHECKLIST.md` with explicit maintenance mode, pre-rollback emergency snapshot, and gzip integrity validation.
+- **WhatsApp API Security Hardening & Zero-Leak Rotation:**
+  - Dynamic encrypted token retrieval via `get_hub_auth_token()` in `whatsapp_bridge.py`.
+  - Live Bearer token rotation on `wa-baileys` container without dropping session or phone pairing (`966569589664`).
+  - Zero token exposure across codebase, logs, and documentation.
+  - Multi-site password synchronization for Single DocType `Elsaidy WhatsApp Hub` across `erp.local` and `erp_test.local`.
 - **LavaLoon KSA Compliance v0.62.0 Integration (PR #4):**
   - Integrated official ZATCA Phase 2 candidate upstream release (Nov 10, 2026).
   - Adoptium Temurin OpenJDK 11 JRE Dockerfile (`ops/Dockerfile.zatca`) with validated SHA-256 checksum for reproducible container builds.

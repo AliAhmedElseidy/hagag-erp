@@ -91,3 +91,31 @@ ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 
 ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local clear-cache"
 ssh ali "docker restart frappe_docker-backend-1 frappe_docker-queue-short-1 frappe_docker-queue-long-1"
 ```
+
+---
+
+## 7. خطة التراجع الآمنة المعتمدة عند الطوارئ (Tested Emergency Rollback Runbook)
+
+في حال حدوث أي طارئ يستدعي التراجع، تم اختبار وتأكيد إجراء الاستعادة بنجاح 100% في البيئة التجريبية وفق الخطوات الست التالية:
+
+```bash
+# 1. تفعيل وضع الصيانة فوراً لإيقاف حركة المستخدمين
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local set-maintenance-mode on"
+
+# 2. أخذ لقطة احتياطية طارئة للحالة الحالية قبل بدء التراجع
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local backup --with-files"
+
+# 3. التحقق الصارم من سلامة ملف النسخة الاحتياطية المستهدفة (Integrity Check)
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 gzip -t /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_file>.sql.gz"
+
+# 4. تنفيذ الاستعادة الآمنة مع تمرير كلمة مرور root لقاعدة البيانات وخيارات ملفات النظام
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local restore /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_file>.sql.gz --db-root-password SuperRootP@ss2026 --with-public-files /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_public_files>.tar --with-private-files /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_private_files>.tar --force"
+
+# 5. الرجوع لفرع أو وسم الكود المستقر السابق
+ssh ali "cd /root/frappe_docker/hagag-erp-repo && git checkout <stable_tag_or_commit>"
+
+# 6. تفريغ الكاش وإلغاء وضع الصيانة وإعادة تشغيل معالجات المهام
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local clear-cache"
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local set-maintenance-mode off"
+ssh ali "docker restart frappe_docker-backend-1 frappe_docker-queue-short-1 frappe_docker-queue-long-1"
+```

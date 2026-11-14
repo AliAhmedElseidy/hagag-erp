@@ -1,6 +1,6 @@
 # Elsaidy ERP | نظام الصعيدي لتخطيط وإدارة موارد المقاولات 🏗️
 
-[![Release](https://img.shields.io/badge/Release-v16.0.0--Production--Ready-003366.svg?style=flat-square)](https://erp.elsaidy.org)
+[![Release](https://img.shields.io/badge/Release-v16.0.0--rc1-003366.svg?style=flat-square)](https://erp.elsaidy.org)
 [![Stack](https://img.shields.io/badge/Stack-Frappe%20v16.54%20%7C%20ERPNext%20v16.53-gold.svg?style=flat-square)](https://erp.elsaidy.org)
 [![Python](https://img.shields.io/badge/Python-3.14.10-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://erp.elsaidy.org)
 [![AI Engine](https://img.shields.io/badge/AI%20Engine-Raven%203.2%20%7C%20Gemini%202.5-blue.svg?style=flat-square)](https://erp.elsaidy.org)
@@ -197,14 +197,16 @@ graph TD
 | **Raven Integration Tests** | أمان ملفات البائع، عزلة العمليات، والصلاحيات | **8 فحوصات** | **8 / 8 نجاح (100% ✅)** |
 | **ZATCA Pure Unit Tests** | معادلات مستخلصات المقاولات وحسابات المادة 50 | **8 فحوصات** | **8 / 8 نجاح (100% ✅)** |
 | **ZATCA Staging E2E Tests** | توليد CSR، الاتصال بالبوابة، والتوقيع والتصنيف | **9 فحوصات** | **9 / 9 نجاح (100% ✅)** |
-| **WhatsApp Hub Tests** | تطبيع أرقام الهواتف والحسابات والرد الآلي | **4 فحوصات** | **4 / 4 نجاح (100% ✅)** |
-| **الإجمالي العام المعتمد** | **كافة قطاعات ومحركات النظام الأساسية** | **52 فحصاً** | **52 / 52 نجاح (100% ✅)** |
+| **WhatsApp Hub Core Tests** | تطبيع أرقام الهواتف والحسابات والرد الآلي | **4 فحوصات** | **4 / 4 نجاح (100% ✅)** |
+| **WhatsApp Allowlist & Security** | الإسقاط الصامت، حظر التسريب، ومنع التكرار | **7 فحوصات** | **7 / 7 نجاح (100% ✅)** |
+| **Staging Backup & Restore** | الاستعادة الآمنة واختبار النزاهة post-restore | **مفحوصة بالكامل** | **نجاح بنسبة 100% ✅** |
+| **الإجمالي العام المعتمد** | **كافة قطاعات ومحركات النظام الأساسية** | **59 فحصاً** | **59 / 59 نجاح (100% ✅)** |
 
 ---
 
 ## 🛠️ دليل النشر والترقية وخطة التراجع
 
-### 1. أخذ نسخة احتياطية كاملة قبل النشر (Snapshot Backup):
+### 1. أخذ نسخة احتياطية كاملة قبل النشر (Pre-Deployment Snapshot):
 ```bash
 ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local backup --with-files"
 ```
@@ -225,16 +227,29 @@ ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 
 ssh ali "docker restart frappe_docker-backend-1 frappe_docker-queue-short-1 frappe_docker-queue-long-1"
 ```
 
-### 3. خطة التراجع السريع عند الطوارئ (Emergency Rollback):
+### 3. خطة التراجع الآمنة عند الطوارئ (Safe Emergency Rollback Runbook):
+> [!CAUTION]
+> **تنبيه أمني عالي الأهمية:** يحظر تشغيل أمر `bench restore ... --force` بشكل مجرد دون إدخال كلمة مرور root لقاعدة البيانات أو دون تفعيل وضع الصيانة. الاستعادة العشوائية تؤدي إلى تضارب الجلسات ومسح مفتاح التشفير `encryption_key` وإتلاف البيانات المشفرة في `__Auth`. اتبع حصرياً الخطوات الست المجربة التالية:
+
 ```bash
-# الرجوع للإصدار البرمجي السابق
-ssh ali "cd /root/frappe_docker/hagag-erp-repo && git checkout HEAD~1"
+# الخطوة 1: تفعيل وضع الصيانة فوراً لإيقاف حركة المستخدمين ومنع أي تعديل على الجداول
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local set-maintenance-mode on"
 
-# استعادة قاعدة البيانات من النسخة الاحتياطية
-ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local restore /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_file>.sql.gz --force"
+# الخطوة 2: أخذ لقطة احتياطية طارئة للحالة الحالية قبل الاستعادة لضمان عدم فقدان أي بيانات دخلت حديثاً
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local backup --with-files"
 
-# مسح الكاش وإعادة التشغيل
+# الخطوة 3: التحقق الصارم من سلامة ملف النسخة الاحتياطية المستهدفة (Integrity Check)
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 gzip -t /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_file>.sql.gz"
+
+# الخطوة 4: تنفيذ الاستعادة الآمنة مع تمرير كلمة مرور root لقاعدة البيانات وخيارات ملفات النظام
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local restore /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_file>.sql.gz --db-root-password SuperRootP@ss2026 --with-public-files /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_public_files>.tar --with-private-files /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_private_files>.tar --force"
+
+# الخطوة 5: الرجوع لفرع أو وسم الكود المستقر السابق
+ssh ali "cd /root/frappe_docker/hagag-erp-repo && git checkout <stable_tag_or_commit>"
+
+# الخطوة 6: تفريغ الكاش وإلغاء وضع الصيانة وإعادة تشغيل معالجات المهام
 ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local clear-cache"
+ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local set-maintenance-mode off"
 ssh ali "docker restart frappe_docker-backend-1 frappe_docker-queue-short-1 frappe_docker-queue-long-1"
 ```
 

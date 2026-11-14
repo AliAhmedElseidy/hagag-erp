@@ -5,10 +5,12 @@ on:
     branches:
       - main
       - feature/lavaloon-zatca-integration
+      - "release/*"
   pull_request:
     branches:
       - main
       - feature/lavaloon-zatca-integration
+      - "release/*"
 
 jobs:
   zatca-pure-tests:

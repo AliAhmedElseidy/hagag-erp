@@ -15,12 +15,13 @@ import json
 import time
 from unittest.mock import patch, MagicMock
 from hagag_erp.whatsapp_bridge import (
-    normalize_phone_number,
+    get_hub_auth_token,
+    get_hub_settings,
     get_verified_contact_rule,
+    normalize_phone_number,
     query_employee_custody_balance,
-    send_baileys_reply,
     receive_baileys_event,
-    get_hub_settings
+    send_baileys_reply,
 )
 from hagag_erp.custody_service import send_custody_whatsapp_notification
 
@@ -32,9 +33,7 @@ def run_tests():
 
     results = {}
     hub = get_hub_settings()
-    auth_token = hub.get_password("api_token") if (hub and hasattr(hub, "get_password")) else "HAGAG_WA_7f3c9a2d6e4b8a1c"
-    if not auth_token:
-        auth_token = "HAGAG_WA_7f3c9a2d6e4b8a1c"
+    auth_token = get_hub_auth_token(hub)
 
     # Setup baseline authorized contact
     authorized_phone = "201028632620"

@@ -37,9 +37,10 @@ def run_all_acceptance_tests():
         INTENT_D_PERSONAL_SALARY_ADVANCE
     )
     from hagag_erp.whatsapp_bridge import (
-        receive_baileys_event,
+        get_hub_auth_token,
         get_hub_settings,
-        query_employee_custody_balance
+        query_employee_custody_balance,
+        receive_baileys_event,
     )
     
     # ══════════════════════════════════════════════════════════
@@ -261,9 +262,7 @@ def run_all_acceptance_tests():
     print("\n--- SECTION 3: WHATSAPP HUB & SECURITY ALLOWLIST ---")
 
     hub = get_hub_settings()
-    auth_token = hub.get_password("api_token") if (hub and hasattr(hub, "get_password")) else "HAGAG_WA_7f3c9a2d6e4b8a1c"
-    if not auth_token:
-        auth_token = "HAGAG_WA_7f3c9a2d6e4b8a1c"
+    auth_token = get_hub_auth_token(hub)
 
     authorized_phone = "201028632620"
     unauthorized_phone = "966561864377"

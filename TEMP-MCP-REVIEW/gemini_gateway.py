@@ -1279,7 +1279,7 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                             headers={
                                 "Content-Type": "application/json",
                                 "Authorization": (
-                                    "Bearer HAGAG_WA_7f3c9a2d6e4b8a1c"
+                                    f"Bearer {get_hub_auth_token()}"
                                 ),
                             },
                             method="POST",

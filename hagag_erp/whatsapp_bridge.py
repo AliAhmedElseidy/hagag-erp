@@ -1,14 +1,16 @@
 # Copyright (c) 2026, Elsaidy ERP and contributors
 # For license information, please see license.txt
 
+import json
+import os
 import re
 import time
-import json
 from decimal import Decimal
-import requests
+
 import frappe
+import requests
 from frappe import _
-from frappe.utils import now_datetime, cint, flt, today
+from frappe.utils import cint, flt, now_datetime, today
 
 ARABIC_TO_ASCII_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
 
@@ -55,25 +57,41 @@ def get_hub_settings(hub_doc=None):
 		return None
 
 
-def call_baileys_api(endpoint: str, method: str = "GET", data: dict = None, hub_doc=None) -> dict:
-	"""Executes HTTP request to local Baileys bridge container with Bearer token auth."""
-	hub = get_hub_settings(hub_doc)
-	base_url = (hub.baileys_url if hub and hub.baileys_url else "http://wa-baileys:3000").rstrip("/")
-	
-	api_token = "HAGAG_WA_7f3c9a2d6e4b8a1c"
+def get_hub_auth_token(hub=None) -> str:
+	"""Retrieve WhatsApp API auth token strictly from encrypted single store or env var."""
+	if not hub:
+		hub = get_hub_settings()
 	if hub and hasattr(hub, "get_password"):
 		try:
 			saved_token = hub.get_password("api_token", raise_exception=False)
 			if saved_token:
-				api_token = saved_token
+				return saved_token
 		except Exception:
 			pass
+	env_token = os.environ.get("WA_API_TOKEN", "").strip()
+	if env_token:
+		return env_token
+	return ""
+
+
+def call_baileys_api(endpoint: str, method: str = "GET", data: dict | None = None, hub_doc=None) -> dict:
+	"""Executes HTTP request to local Baileys bridge container with Bearer token auth."""
+	hub = get_hub_settings(hub_doc)
+	base_url = (hub.baileys_url if hub and hub.baileys_url else "http://wa-baileys:3000").rstrip("/")
+
+	api_token = get_hub_auth_token(hub)
+	if not api_token:
+		frappe.log_error(
+			"WhatsApp API token is not configured in Elsaidy WhatsApp Hub or WA_API_TOKEN",
+			"WhatsApp Auth Error",
+		)
+		return {"status": "error", "message": "WhatsApp API token not configured"}
 
 	url = f"{base_url}/{endpoint.lstrip('/')}"
 	headers = {
 		"Authorization": f"Bearer {api_token}",
 		"x-api-token": api_token,
-		"Content-Type": "application/json"
+		"Content-Type": "application/json",
 	}
 
 	try:
@@ -970,15 +988,11 @@ def receive_baileys_event():
 	auth_header = req.headers.get("Authorization", "")
 	api_token_header = req.headers.get("x-api-token", "")
 	hub = get_hub_settings()
-	
-	expected_token = "HAGAG_WA_7f3c9a2d6e4b8a1c"
-	if hub and hasattr(hub, "get_password"):
-		try:
-			saved_token = hub.get_password("api_token", raise_exception=False)
-			if saved_token:
-				expected_token = saved_token
-		except Exception:
-			pass
+
+	expected_token = get_hub_auth_token(hub)
+	if not expected_token:
+		frappe.response["http_status_code"] = 401
+		return {"error": "Unauthorized: API token not configured"}
 
 	is_authed = (auth_header == f"Bearer {expected_token}") or (api_token_header == expected_token)
 	if not is_authed:

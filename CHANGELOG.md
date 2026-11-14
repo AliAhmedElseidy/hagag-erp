@@ -5,9 +5,14 @@ All notable changes to the Elsaidy ERP (hagag-erp) platform are documented in th
 
 ---
 
-## [16.0.0-rc1] - 2026-11-14
+## [16.0.0] - 2026-11-15
 
 ### Added
+- **Production Architecture Documentation:**
+  - Added comprehensive technical architecture guide (`docs/ARCHITECTURE.md`) detailing multi-container topology, native Raven integration, WhatsApp Baileys hub, contracting tax engine, and future extension points.
+- **MariaDB Root Credential Rotation:**
+  - Coordinated rotation of compromised database root credentials on production host and containers with zero exposure in logs or commits.
+  - Stored in secured local environment file (`0600`) and updated in compose configuration.
 - **Staging Backup & Restore Verification:**
   - Real database restore executed and verified on staging site (`erp_test.local`) using `bench restore --db-root-password --force`.
   - Comprehensive post-restore verification with 100% pass rate across ZATCA engine and Raven integration test suites.

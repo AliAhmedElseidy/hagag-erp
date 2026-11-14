@@ -1,6 +1,6 @@
 # Elsaidy ERP | نظام الصعيدي لتخطيط وإدارة موارد المقاولات 🏗️
 
-[![Release](https://img.shields.io/badge/Release-v16.0.0--rc1-003366.svg?style=flat-square)](https://erp.elsaidy.org)
+[![Release](https://img.shields.io/badge/Release-v16.0.0-003366.svg?style=flat-square)](https://erp.elsaidy.org)
 [![Stack](https://img.shields.io/badge/Stack-Frappe%20v16.54%20%7C%20ERPNext%20v16.53-gold.svg?style=flat-square)](https://erp.elsaidy.org)
 [![Python](https://img.shields.io/badge/Python-3.14.10-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://erp.elsaidy.org)
 [![AI Engine](https://img.shields.io/badge/AI%20Engine-Raven%203.2%20%7C%20Gemini%202.5-blue.svg?style=flat-square)](https://erp.elsaidy.org)

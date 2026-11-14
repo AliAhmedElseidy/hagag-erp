@@ -89,7 +89,7 @@ ssh ali "docker restart frappe_docker-backend-1 frappe_docker-queue-short-1 frap
 
 3. **التحقق من حالة واتساب:**
    ```bash
-   ssh ali "curl -s -H 'Authorization: Bearer c3feaa802afa03134fc4dfd744fc9fdf2a886759f0ff06ade10bffb559ed43a2' http://localhost:3001/status"
+   ssh ali 'curl -s -H "Authorization: Bearer $(grep WA_API_TOKEN /root/wa-baileys/.env | cut -d= -f2)" http://localhost:3001/status'
    ```
    يجب أن يعيد: `"connected": true`.
 

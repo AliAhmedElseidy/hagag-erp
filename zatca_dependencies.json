@@ -1,0 +1,15 @@
+{
+  "app": "ksa_compliance",
+  "upstream_repository": "https://github.com/lavaloon-eg/ksa_compliance",
+  "evaluated_version": "0.62.0",
+  "release_date": "2026-11-10",
+  "pinned_commit": "39a3817e098e98066af2c1539d6ad6ed18ad0225",
+  "python_requires": ">=3.10",
+  "frappe_requires": ">=15.0.0,<17.0.0",
+  "java_runtime": "OpenJDK 11 Headless (Adoptium)",
+  "zatca_sdk_version": "2.10.0",
+  "persistence_paths": {
+    "keys_and_certs": "zatca-files/",
+    "binaries_and_jre": "zatca-tools/"
+  }
+}

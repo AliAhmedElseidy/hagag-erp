@@ -1,8 +1,140 @@
-/* === Hagag UIUX Desk v16 === */
-.dropdown-menu li:has(a[onclick*="show_about"]),
-.dropdown-menu li:has(a[href*="frappe.io"]),
-li[data-label="About"], li[data-label="Support"],
-li[data-label="معلومات عن النظام"], li[data-label="دعم فرابيه"],
-a[onclick*="show_about"], a[href*="frappe.io"] {
+/* === Elsaidy ERP UIUX Desk v16 === */
+
+/* 1. User Dropdown Menu Sanitization - Scoped strictly to navbar user menu */
+.dropdown-navbar-user li:has(a[onclick*="show_about"]),
+.dropdown-navbar-user li:has(a[href*="frappe.io"]),
+.dropdown-navbar-user [data-label="About"],
+.dropdown-navbar-user [data-label="Support"],
+.dropdown-navbar-user [data-label="معلومات عن النظام"],
+.dropdown-navbar-user [data-label="دعم فرابيه"] {
     display: none !important;
+}
+
+/* 2. Desktop App Launcher - Specificity-Driven Anti-Truncation & Responsive Grid */
+body.desktop-page .desktop-container > .icons-container > .icons {
+    gap: 16px !important;
+    row-gap: 20px !important;
+    justify-items: center !important;
+}
+
+body.desktop-page .desktop-icon,
+.desktop-wrapper .desktop-icon,
+.icons-container .desktop-icon,
+.desktop-icon {
+    width: 140px !important;
+    min-width: 130px !important;
+    height: auto !important;
+    min-height: 120px !important;
+    padding: 10px 6px !important;
+    margin: 4px !important;
+    display: inline-flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    text-align: center !important;
+    transition: transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out !important;
+    border-radius: 14px !important;
+}
+
+body.desktop-page .desktop-icon:hover {
+    transform: translateY(-2px) !important;
+}
+
+body.desktop-page .icon-caption,
+body.desktop-page .desktop-icon .icon-caption,
+.desktop-wrapper .desktop-icon .icon-caption,
+.desktop-icon .icon-caption {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    min-height: 34px !important;
+    text-wrap: wrap !important;
+    white-space: normal !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    margin-top: 6px !important;
+}
+
+body.desktop-page .icon-title,
+body.desktop-page a.icon-title,
+body.desktop-page .desktop-icon .icon-title,
+.desktop-wrapper .desktop-icon .icon-title,
+.desktop-icon .icon-title,
+.desktop-icon .app-title {
+    width: 100% !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    line-height: 1.25 !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    max-height: 2.8em !important;
+    overflow: hidden !important;
+    text-overflow: unset !important;
+    display: -webkit-box !important;
+    -webkit-line-clamp: 2 !important;
+    -webkit-box-orient: vertical !important;
+    color: #1e293b !important;
+    text-align: center !important;
+}
+
+[data-theme="dark"] body.desktop-page .icon-title,
+[data-theme="dark"] .desktop-icon .icon-title,
+[data-theme="dark"] .desktop-icon .app-title {
+    color: #f1f5f9 !important;
+}
+
+/* 3. Number Cards & Dashboard Widget Titles - High Specificity Anti-Truncation */
+.widget.number-widget-box,
+.number-widget-box {
+    min-height: 115px !important;
+}
+
+.widget.number-widget-box .widget-head,
+.number-widget-box .widget-head {
+    height: auto !important;
+    min-height: 38px !important;
+    align-items: flex-start !important;
+    padding: 6px 8px 0px 8px !important;
+}
+
+.widget.number-widget-box .widget-label,
+.number-widget-box .widget-label {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+}
+
+.widget.number-widget-box .widget-title,
+.number-widget-box .widget-title,
+.widget.number-widget-box .widget-title .ellipsis,
+.number-widget-box .widget-title .ellipsis,
+.widget.number-widget-box .ellipsis,
+.number-card-title,
+.widget-head .widget-title,
+.widget-head .widget-title .ellipsis {
+    width: 100% !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    line-height: 1.25 !important;
+    max-height: 2.8em !important;
+    overflow: hidden !important;
+    text-overflow: unset !important;
+    display: -webkit-box !important;
+    -webkit-line-clamp: 2 !important;
+    -webkit-box-orient: vertical !important;
+    height: auto !important;
+}
+
+/* 4. RTL Typography & Arabic Display */
+[dir="rtl"] body,
+[dir="rtl"] .desk-sidebar,
+[dir="rtl"] .layout-main,
+[dir="rtl"] .standard-sidebar,
+[dir="rtl"] .widget-box {
+    font-family: 'Cairo', 'Tajawal', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
 }

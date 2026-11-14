@@ -117,7 +117,7 @@ ssh ali "docker restart frappe_docker-backend-1 frappe_docker-queue-short-1 frap
 
 4. **تنفيذ الاستعادة الآمنة مع تمرير كلمة مرور root لقاعدة البيانات وخيارات ملفات النظام:**
    ```bash
-   ssh ali "docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local restore /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_file>.sql.gz --db-root-password SuperRootP@ss2026 --with-public-files /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_public_files>.tar --with-private-files /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_private_files>.tar --force"
+   ssh ali 'docker exec -w /home/frappe/frappe-bench/sites frappe_docker-backend-1 bench --site erp.local restore /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_file>.sql.gz --db-root-password "${MYSQL_ROOT_PASSWORD}" --with-public-files /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_public_files>.tar --with-private-files /home/frappe/frappe-bench/sites/erp.local/private/backups/<backup_private_files>.tar --force'
    ```
 
 5. **الرجوع لفرع أو وسم الكود المستقر السابق:**

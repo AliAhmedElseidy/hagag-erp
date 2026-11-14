@@ -1,5 +1,5 @@
 /**
- * Elsaidy ERP - Universal Enterprise White-Labeling & Auto-Dismiss Engine
+ * Elsaidy ERP - Enterprise White-Labeling & Auto-Dismiss Engine
  * شركة ركن سبل الأفق للمقاولات
  */
 (function () {
@@ -20,11 +20,10 @@
                 'onboarding_last_step',
                 'desk_onboarding_completed'
             ];
-            keys.forEach(k => {
+            keys.forEach(function (k) {
                 localStorage.setItem(k, '1');
                 sessionStorage.setItem(k, '1');
             });
-            // Specific flags for Helpdesk and CRM Vue 3 state
             localStorage.setItem('helpdesk:onboarding:dismissed', 'true');
             localStorage.setItem('crm:onboarding:dismissed', 'true');
             localStorage.setItem('fcrm:setup_completed', 'true');
@@ -33,75 +32,33 @@
 
     dismissOnboarding();
 
-    // 2. Replacements Dictionary (Strict Hierarchy)
+    // 2. Concise Brand Replacements
     const REPLACEMENTS = [
-        [/\bFrappe Helpdesk\b/gi, 'Elsaidy Support'],
-        [/\bHelpdesk\b/gi, 'Elsaidy Support'],
-        [/\bFrappe CRM\b/gi, 'Elsaidy CRM'],
-        [/\bHagag CRM\b/gi, 'Elsaidy CRM'],
-        [/\bFrappe Insights\b/gi, 'Elsaidy BI & Insights'],
-        [/\bInsights\b/gi, 'Elsaidy BI & Insights'],
-        [/\bFrappe HR\b/gi, 'Elsaidy HR'],
-        [/\bHagag HR\b/gi, 'Elsaidy HR'],
-        [/\bFrappe Builder\b/gi, 'Elsaidy Builder'],
-        [/\bFrappe Wiki\b/gi, 'Elsaidy Wiki'],
-        [/\bFrappe Framework\b/gi, 'Elsaidy Core | النظام الأساسي'],
-        [/إطار العمل/g, 'Elsaidy Core | النظام الأساسي'],
+        [/\bFrappe Helpdesk\b/g, 'Elsaidy Support'],
+        [/\bFrappe CRM\b/g, 'Elsaidy CRM'],
+        [/\bHagag CRM\b/g, 'Elsaidy CRM'],
+        [/\bFrappe Insights\b/g, 'Elsaidy Insights'],
+        [/\bFrappe HR\b/g, 'Elsaidy HR'],
+        [/\bHagag HR\b/g, 'Elsaidy HR'],
+        [/\bFrappe Builder\b/g, 'Elsaidy Builder'],
+        [/\bFrappe Wiki\b/g, 'Elsaidy Wiki'],
+        [/\bFrappe Framework\b/g, 'Elsaidy Core'],
+        [/إطار العمل/g, 'النظام الأساسي'],
         [/شركة حجاج/g, 'شركة ركن سبل الأفق للمقاولات'],
         [/من حجاج للمقاولات/g, 'شركة ركن سبل الأفق للمقاولات'],
         [/مساعد حجاج الذكي/g, 'مساعد Elsaidy الذكي'],
         [/حجاج/g, 'الصعيدي'],
-        [/\bHagag\b/gi, 'Elsaidy'],
-        [/\bERPNext\b/gi, 'Elsaidy ERP'],
-        [/\bErp Elsaidy\b/gi, 'Elsaidy ERP'],
-        [/\bFrappe\b/gi, 'Elsaidy']
+        [/\bHagag\b/g, 'Elsaidy'],
+        [/\bERPNext\b/g, 'Elsaidy ERP']
     ];
 
     function sanitizeText(str) {
         if (!str || typeof str !== 'string') return str;
-        let res = str;
-        for (let i = 0; i < REPLACEMENTS.length; i++) {
+        var res = str;
+        for (var i = 0; i < REPLACEMENTS.length; i++) {
             res = res.replace(REPLACEMENTS[i][0], REPLACEMENTS[i][1]);
         }
         return res;
-    }
-
-    function sanitizeNode(node) {
-        if (!node) return;
-        if (node.nodeType === Node.TEXT_NODE) {
-            const val = node.nodeValue;
-            if (val && (
-                val.includes('Frappe') || val.includes('Hagag') || val.includes('حجاج') ||
-                val.includes('ERPNext') || val.includes('إطار العمل')
-            )) {
-                node.nodeValue = sanitizeText(val);
-            }
-        } else if (node.nodeType === Node.ELEMENT_NODE) {
-            // Avoid touching code, script or style tags
-            const tag = node.tagName.toLowerCase();
-            if (tag === 'script' || tag === 'style' || tag === 'textarea' || tag === 'input') return;
-
-            // Check title attributes
-            if (node.hasAttribute('title')) {
-                const title = node.getAttribute('title');
-                if (title && (title.includes('Frappe') || title.includes('Hagag') || title.includes('حجاج'))) {
-                    node.setAttribute('title', sanitizeText(title));
-                }
-            }
-
-            // Remove onboarding containers if they appear
-            if (node.classList && (
-                node.classList.contains('driver-popover') ||
-                node.classList.contains('onboarding-widget') ||
-                node.classList.contains('tour-popup')
-            )) {
-                node.style.display = 'none';
-            }
-
-            for (let child = node.firstChild; child; child = child.nextSibling) {
-                sanitizeNode(child);
-            }
-        }
     }
 
     function sanitizeDocumentTitle() {
@@ -113,38 +70,57 @@
         }
     }
 
-    // Run on ready and listen for DOM mutations
-    function init() {
-        sanitizeDocumentTitle();
-        if (document.body) {
-            sanitizeNode(document.body);
-        }
-
-        const observer = new MutationObserver(function (mutations) {
-            dismissOnboarding();
-            sanitizeDocumentTitle();
-            for (let i = 0; i < mutations.length; i++) {
-                const m = mutations[i];
-                if (m.type === 'childList') {
-                    for (let j = 0; j < m.addedNodes.length; j++) {
-                        sanitizeNode(m.addedNodes[j]);
-                    }
-                } else if (m.type === 'characterData') {
-                    sanitizeNode(m.target);
-                }
-            }
-        });
-
-        observer.observe(document.documentElement, {
-            childList: true,
-            subtree: true,
-            characterData: true
+    // Dismiss any active driver/tour popovers immediately
+    function purgeOnboardingDOM() {
+        var popovers = document.querySelectorAll(
+            '.driver-popover, .driver-overlay, .shepherd-element, .shepherd-modal-overlay-container, .onboarding-widget'
+        );
+        popovers.forEach(function (el) {
+            el.style.setProperty('display', 'none', 'important');
         });
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
+    // Debounced safe DOM sweep
+    var sweepTimeout = null;
+    function scheduleSweep() {
+        if (sweepTimeout) clearTimeout(sweepTimeout);
+        sweepTimeout = setTimeout(function () {
+            dismissOnboarding();
+            purgeOnboardingDOM();
+            sanitizeDocumentTitle();
+        }, 150);
+    }
+
+    // Listen to route changes rather than continuous characterData mutations
+    if (window.frappe && frappe.router) {
+        frappe.router.on('change', scheduleSweep);
+    }
+    window.addEventListener('DOMContentLoaded', scheduleSweep);
+
+    // Throttled observer strictly for modal/body popups (childList only, no characterData)
+    var modalObserver = new MutationObserver(function (mutations) {
+        for (var i = 0; i < mutations.length; i++) {
+            var m = mutations[i];
+            if (m.addedNodes && m.addedNodes.length) {
+                for (var j = 0; j < m.addedNodes.length; j++) {
+                    var node = m.addedNodes[j];
+                    if (node.classList && (
+                        node.classList.contains('driver-popover') ||
+                        node.classList.contains('onboarding-widget') ||
+                        node.classList.contains('shepherd-element')
+                    )) {
+                        node.style.setProperty('display', 'none', 'important');
+                    }
+                }
+            }
+        }
+    });
+
+    if (document.body) {
+        modalObserver.observe(document.body, { childList: true, subtree: false });
     } else {
-        init();
+        document.addEventListener('DOMContentLoaded', function () {
+            modalObserver.observe(document.body, { childList: true, subtree: false });
+        });
     }
 })();

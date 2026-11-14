@@ -1422,42 +1422,89 @@ def sync_whitelabel_and_branding():
 
 def sync_desktop_icons_and_translations():
     """
-    Updates Desktop Icons and tabTranslation to remove Frappe/Hagag names everywhere on /desk.
+    Updates Desktop Icons and tabTranslation to provide clean, elegant,
+    bilingual labels on /desk and prevent truncation.
     """
     print("\n[Elsaidy ERP] Synchronizing Desktop Icons & Translations...")
     icon_map = {
-        "Framework": "Elsaidy Core | النظام الأساسي",
-        "ERPNext": "Elsaidy ERP",
-        "ERPNext Settings": "إعدادات Elsaidy ERP",
-        "Frappe HR": "Elsaidy HR",
-        "Frappe CRM": "Elsaidy CRM",
-        "Helpdesk": "Elsaidy Support",
-        "Insights": "Elsaidy BI & Insights",
-        "Frappe Builder": "Elsaidy Builder",
-        "Wiki": "Elsaidy Wiki"
+        "ERPNext": "إدارة الأعمال (ERP)",
+        "Frappe HR": "الموارد البشرية (HR)",
+        "HR Setup": "إعدادات الموارد البشرية",
+        "Helpdesk": "خدمة العملاء والدعم",
+        "Frappe CRM": "إدارة علاقات العملاء (CRM)",
+        "CRM": "إدارة علاقات العملاء",
+        "Frappe Builder": "بناء وتصميم المواقع",
+        "Insights": "تحليلات الأعمال (BI)",
+        "Wiki": "قاعدة المعرفة والتوثيق",
+        "Raven": "المساعد الذكي (AI)",
+        "Framework": "النظام الأساسي (Core)",
+        "ERPNext Settings": "إعدادات إدارة الأعمال"
     }
     for icon_name, new_label in icon_map.items():
         if frappe.db.exists("Desktop Icon", icon_name):
             frappe.db.set_value("Desktop Icon", icon_name, "label", new_label)
 
     trans_entries = [
-        ("ar", "Framework", "Elsaidy Core | النظام الأساسي"),
-        ("ar", "Frappe Framework", "Elsaidy Core | النظام الأساسي"),
-        ("ar", "إطار العمل", "Elsaidy Core | النظام الأساسي"),
-        ("ar", "ERPNext", "Elsaidy ERP"),
-        ("ar", "Erp Elsaidy", "Elsaidy ERP"),
-        ("ar", "Frappe HR", "Elsaidy HR"),
-        ("ar", "Frappe CRM", "Elsaidy CRM"),
-        ("ar", "إدارة علاقات العملاء", "Elsaidy CRM"),
-        ("ar", "Frappe Helpdesk", "Elsaidy Support"),
-        ("ar", "Helpdesk", "Elsaidy Support"),
-        ("ar", "Frappe Insights", "Elsaidy BI & Insights"),
-        ("ar", "Insights", "Elsaidy BI & Insights"),
-        ("ar", "Frappe Builder", "Elsaidy Builder"),
-        ("ar", "Builder", "Elsaidy Builder"),
-        ("ar", "Frappe Wiki", "Elsaidy Wiki"),
-        ("ar", "Wiki", "Elsaidy Wiki"),
-        ("ar", "Raven", "Elsaidy AI (Raven)"),
+        ("ar", "Framework", "النظام الأساسي (Core)"),
+        ("ar", "Frappe Framework", "النظام الأساسي (Core)"),
+        ("ar", "إطار العمل", "النظام الأساسي (Core)"),
+        ("ar", "ERPNext", "إدارة الأعمال (ERP)"),
+        ("ar", "Erp Elsaidy", "إدارة الأعمال (ERP)"),
+        ("ar", "Elsaidy ERP", "إدارة الأعمال (ERP)"),
+        ("ar", "Frappe HR", "الموارد البشرية (HR)"),
+        ("ar", "HRMS", "الموارد البشرية (HR)"),
+        ("ar", "Elsaidy HR", "الموارد البشرية (HR)"),
+        ("ar", "Frappe CRM", "إدارة علاقات العملاء (CRM)"),
+        ("ar", "CRM", "إدارة علاقات العملاء (CRM)"),
+        ("ar", "Elsaidy CRM", "إدارة علاقات العملاء (CRM)"),
+        ("ar", "إدارة علاقات العملاء", "إدارة علاقات العملاء (CRM)"),
+        ("ar", "Frappe Helpdesk", "خدمة العملاء والدعم"),
+        ("ar", "Helpdesk", "خدمة العملاء والدعم"),
+        ("ar", "Elsaidy Support", "خدمة العملاء والدعم"),
+        ("ar", "Frappe Insights", "تحليلات الأعمال (BI)"),
+        ("ar", "Insights", "تحليلات الأعمال (BI)"),
+        ("ar", "Elsaidy BI & Insights", "تحليلات الأعمال (BI)"),
+        ("ar", "Elsaidy Insights", "تحليلات الأعمال (BI)"),
+        ("ar", "Frappe Builder", "بناء وتصميم المواقع"),
+        ("ar", "Builder", "بناء وتصميم المواقع"),
+        ("ar", "Elsaidy Builder", "بناء وتصميم المواقع"),
+        ("ar", "Frappe Wiki", "قاعدة المعرفة والتوثيق"),
+        ("ar", "Wiki", "قاعدة المعرفة والتوثيق"),
+        ("ar", "Elsaidy Wiki", "قاعدة المعرفة والتوثيق"),
+        ("ar", "Raven", "المساعد الذكي (AI)"),
+        ("ar", "Elsaidy AI", "المساعد الذكي (AI)"),
+        ("ar", "Elsaidy AI (Raven)", "المساعد الذكي (AI)"),
+        ("ar", "ERPNext Settings", "إعدادات إدارة الأعمال"),
+        ("ar", "HR Setup", "إعدادات الموارد البشرية"),
+        ("ar", "Active Customers", "العملاء النشطون"),
+        ("ar", "Active Suppliers", "الموردون النشطون"),
+        ("ar", "Total Warehouses", "إجمالي المستودعات"),
+        ("ar", "Top Customers", "أهم العملاء"),
+        ("ar", "Annual Sales", "المبيعات السنوية"),
+        ("ar", "Annual Purchase", "المشتريات السنوية"),
+        ("ar", "Total Stock Value", "إجمالي قيمة المخزون"),
+        ("ar", "Profit and Loss", "الأرباح والخسائر"),
+        ("ar", "Bank Balance", "رصيد البنك"),
+        ("ar", "Budget Variance", "انحراف الميزانية"),
+        ("ar", "Attendance Count", "سجل الحضور والانصراف"),
+        ("ar", "Total Employees", "إجمالي الموظفين"),
+        ("ar", "Employees Joining", "الموظفون الجدد"),
+        ("ar", "Employees Relieved", "الموظفون المنتهية خدماتهم"),
+        ("ar", "Department Wise Employee Count", "توزيع الموظفين حسب القسم"),
+        ("ar", "Your customers, ranked by what you deliver to them.", "قائمة العملاء مرتبة حسب قيمة التسليمات والخدمات المنفذة."),
+        ("ar", "How much money sits in your bank accounts, month by month.", "حركة وتطور الأرصدة البنكية شهرياً."),
+        ("ar", "Your budgets against what you actually spent.", "مقارنة الميزانية التقديرية بالمصروفات الفعلية."),
+        ("ar", "What your stock is worth, by item group.", "قيمة المخزون مصنفة حسب مجموعات الأصناف."),
+        ("ar", "Hiring vs Attrition Count", "معدل التعيين مقابل انتهاء الخدمة"),
+        ("ar", "Active Projects", "المشاريع الإنشائية النشطة"),
+        ("ar", "Employee Custody", "عهد نقدية تحت التسوية"),
+        ("ar", "Employee Custodies", "عهد نقدية تحت التسوية"),
+        ("ar", "Operating Expenses", "المصروفات التشغيلية المعتمدة"),
+        ("ar", "Bank Balance (SNB)", "رصيد البنك الأهلي السعودي (SNB)"),
+        ("ar", "Cash In Hand", "رصيد الصندوق النقدي"),
+        ("ar", "Active Employees", "إجمالي الموظفين النشطين"),
+        ("ar", "Approved Sales Invoices", "فواتير المبيعات المعتمدة"),
+        ("ar", "Approved Purchase Orders", "أوامر الشراء المعتمدة"),
         ("ar", "شركة حجاج", "شركة ركن سبل الأفق للمقاولات"),
         ("ar", "حجاج", "الصعيدي"),
         ("ar", "Hagag", "Elsaidy"),
@@ -1469,13 +1516,13 @@ def sync_desktop_icons_and_translations():
         ("en", "Frappe CRM", "Elsaidy CRM"),
         ("en", "Frappe Helpdesk", "Elsaidy Support"),
         ("en", "Helpdesk", "Elsaidy Support"),
-        ("en", "Frappe Insights", "Elsaidy BI & Insights"),
-        ("en", "Insights", "Elsaidy BI & Insights"),
+        ("en", "Frappe Insights", "Elsaidy Insights"),
+        ("en", "Insights", "Elsaidy Insights"),
         ("en", "Frappe Builder", "Elsaidy Builder"),
         ("en", "Builder", "Elsaidy Builder"),
         ("en", "Frappe Wiki", "Elsaidy Wiki"),
         ("en", "Wiki", "Elsaidy Wiki"),
-        ("en", "Raven", "Elsaidy AI (Raven)"),
+        ("en", "Raven", "Elsaidy AI"),
         ("en", "Hagag", "Elsaidy"),
         ("en", "Frappe", "Elsaidy")
     ]
@@ -1494,6 +1541,235 @@ def sync_desktop_icons_and_translations():
                 pass
 
     frappe.db.commit()
+
+
+def fix_dashboard_charts_and_cards():
+    """
+    Ensures standard Dashboard Charts and Number Cards across all workspaces
+    have valid default filters and do not throw uncaught errors or freeze on loading.
+    Uses frappe.db.set_value to bypass standard doctype edit restrictions.
+    """
+    print("\n[Elsaidy ERP] Fixing standard dashboard charts & number cards...")
+    company = "ركن سبل الافق"
+
+    charts_to_fix = {
+        "Profit and Loss": {
+            "company": company,
+            "filter_based_on": "Fiscal Year",
+            "from_fiscal_year": "2026",
+            "to_fiscal_year": "2026",
+            "periodicity": "Yearly",
+            "include_default_book_entries": 1
+        },
+        "Bank Balance": {
+            "company": company,
+            "account": "1201 - البنك الأهلي السعودي (SNB) - Rkn"
+        },
+        "Budget Variance": {
+            "company": company,
+            "from_fiscal_year": "2026",
+            "to_fiscal_year": "2026",
+            "period": "Monthly",
+            "budget_against": "Cost Center",
+            "show_cumulative": 0
+        },
+        "Attendance Count": {
+            "filter_based_on": "Month",
+            "summarized_view": 0,
+            "month": 11,
+            "year": 2026,
+            "company": company
+        },
+        "Hiring vs Attrition Count": {
+            "company": company,
+            "from_date": "2026-01-01",
+            "to_date": "2026-12-31",
+            "time_interval": "Monthly"
+        },
+        "Stock Value by Item Group": {
+            "company": company
+        },
+        "Top Customers": {
+            "period": "Yearly",
+            "based_on": "Customer",
+            "company": company
+        }
+    }
+
+    for name, filters in charts_to_fix.items():
+        if frappe.db.exists("Dashboard Chart", name):
+            frappe.db.set_value("Dashboard Chart", name, "filters_json", json.dumps(filters))
+
+    frappe.db.commit()
+    print(" -> Standard dashboard charts & cards verified and updated.")
+
+
+def sync_executive_home_dashboard():
+    """
+    Creates real-time, permission-checked Executive Dashboard Number Cards
+    and Chart for شركة ركن سبل الأفق للمقاولات, and configures the Home workspace.
+    """
+    print("\n[Elsaidy ERP] Synchronizing Executive Home Dashboard for Rkn...")
+    company = "ركن سبل الافق"
+
+    cards = [
+        {
+            "label": "المشاريع النشطة",
+            "type": "Document Type",
+            "document_type": "Project",
+            "function": "Count",
+            "filters_json": json.dumps([
+                ["Project", "status", "=", "Open"],
+                ["Project", "company", "=", company]
+            ]),
+            "is_public": 1,
+            "color": "#1e3a8a"
+        },
+        {
+            "label": "عهد نقدية تحت التسوية",
+            "type": "Custom",
+            "document_type": "GL Entry",
+            "method": "hagag_erp.dashboard_api.get_employee_custody_balance",
+            "currency": "SAR",
+            "show_full_number": 1,
+            "is_public": 1,
+            "color": "#d97706"
+        },
+        {
+            "label": "رصيد البنك الأهلي - SNB",
+            "type": "Custom",
+            "document_type": "GL Entry",
+            "method": "hagag_erp.dashboard_api.get_bank_balance",
+            "currency": "SAR",
+            "show_full_number": 1,
+            "is_public": 1,
+            "color": "#0284c7"
+        },
+        {
+            "label": "رصيد الصندوق النقدي",
+            "type": "Custom",
+            "document_type": "GL Entry",
+            "method": "hagag_erp.dashboard_api.get_cash_balance",
+            "currency": "SAR",
+            "show_full_number": 1,
+            "is_public": 1,
+            "color": "#059669"
+        },
+        {
+            "label": "الموظفون النشطون",
+            "type": "Document Type",
+            "document_type": "Employee",
+            "function": "Count",
+            "filters_json": json.dumps([
+                ["Employee", "status", "=", "Active"],
+                ["Employee", "company", "=", company]
+            ]),
+            "is_public": 1,
+            "color": "#7c3aed"
+        },
+        {
+            "label": "المصروفات التشغيلية المعتمدة",
+            "type": "Custom",
+            "document_type": "GL Entry",
+            "method": "hagag_erp.dashboard_api.get_operating_expenses",
+            "currency": "SAR",
+            "show_full_number": 1,
+            "is_public": 1,
+            "color": "#ea580c"
+        },
+        {
+            "label": "فواتير المبيعات المعتمدة",
+            "type": "Document Type",
+            "document_type": "Sales Invoice",
+            "function": "Count",
+            "filters_json": json.dumps([
+                ["Sales Invoice", "docstatus", "=", "1"],
+                ["Sales Invoice", "company", "=", company]
+            ]),
+            "is_public": 1,
+            "color": "#2563eb"
+        },
+        {
+            "label": "أوامر الشراء المعتمدة",
+            "type": "Document Type",
+            "document_type": "Purchase Order",
+            "function": "Count",
+            "filters_json": json.dumps([
+                ["Purchase Order", "docstatus", "=", "1"],
+                ["Purchase Order", "company", "=", company]
+            ]),
+            "is_public": 1,
+            "color": "#475569"
+        }
+    ]
+
+    created_card_names = []
+    for c in cards:
+        lbl = c["label"]
+        if frappe.db.exists("Number Card", lbl):
+            doc = frappe.get_doc("Number Card", lbl)
+            doc.update(c)
+            doc.save(ignore_permissions=True)
+            created_card_names.append(doc.name)
+        else:
+            c_dict = dict(c)
+            c_dict["doctype"] = "Number Card"
+            doc = frappe.get_doc(c_dict)
+            doc.insert(ignore_permissions=True)
+            created_card_names.append(doc.name)
+
+    chart_name = "مشاريع الشركة حسب الحالة"
+    chart_dict = {
+        "doctype": "Dashboard Chart",
+        "chart_name": chart_name,
+        "chart_type": "Group By",
+        "document_type": "Project",
+        "group_by_based_on": "status",
+        "aggregate_function_based_on": "name",
+        "type": "Bar",
+        "filters_json": json.dumps([["Project", "company", "=", company]]),
+        "is_public": 1,
+        "empty_state_message": "حالة المشاريع الإنشائية لشركة ركن سبل الأفق"
+    }
+    if frappe.db.exists("Dashboard Chart", chart_name):
+        doc = frappe.get_doc("Dashboard Chart", chart_name)
+        doc.update(chart_dict)
+        doc.save(ignore_permissions=True)
+    else:
+        doc = frappe.get_doc(chart_dict)
+        doc.insert(ignore_permissions=True)
+
+    frappe.db.commit()
+
+    # Configure Workspace "Home"
+    if frappe.db.exists("Workspace", "Home"):
+        home = frappe.get_doc("Workspace", "Home")
+        content_blocks = [
+            {"id": f"rkn_nc_{i+1}", "type": "number_card", "data": {"number_card_name": name, "col": 3}}
+            for i, name in enumerate(created_card_names)
+        ]
+        content_blocks.append({"id": "rkn_chart_1", "type": "chart", "data": {"chart_name": chart_name, "col": 12}})
+
+        home.content = json.dumps(content_blocks)
+        home.number_cards = []
+        for name in created_card_names:
+            home.append("number_cards", {
+                "number_card_name": name,
+                "label": name
+            })
+        home.charts = []
+        home.append("charts", {
+            "chart_name": chart_name,
+            "label": chart_name
+        })
+        home.module_onboarding = None
+
+        frappe.flags.in_patch = True
+        home.flags.ignore_validate = True
+        home.save(ignore_permissions=True)
+
+    frappe.db.commit()
+    print(" -> Executive Home Dashboard synchronized successfully.")
 
 
 def sync_fcrm_and_helpdesk():
@@ -2276,6 +2552,18 @@ def sync_elsaidy_customizations():
         sync_desktop_icons_and_translations()
     except Exception as e:
         print(f" -> Error in sync_desktop_icons_and_translations: {e}")
+
+    # 3.1. Standard Dashboard Charts & Cards Protection
+    try:
+        fix_dashboard_charts_and_cards()
+    except Exception as e:
+        print(f" -> Error in fix_dashboard_charts_and_cards: {e}")
+
+    # 3.2. Executive Home Dashboard for Rkn
+    try:
+        sync_executive_home_dashboard()
+    except Exception as e:
+        print(f" -> Error in sync_executive_home_dashboard: {e}")
 
     # 4. FCRM & Helpdesk Setup
     try:

@@ -21,7 +21,11 @@ const app = express();
 const logger = pino({ level: 'warn' });
 
 const PORT = process.env.PORT || 3000;
-const API_TOKEN = process.env.WA_API_TOKEN || 'HAGAG_WA_7f3c9a2d6e4b8a1c';
+const API_TOKEN = process.env.WA_API_TOKEN || '';
+if (!API_TOKEN) {
+  console.error('FATAL: WA_API_TOKEN must be set in environment');
+  process.exit(1);
+}
 const SESSION_DIR = process.env.SESSION_DIR || '/app/session';
 const FRAPPE_WEBHOOK_URL = process.env.FRAPPE_WEBHOOK_URL || 'http://backend:8000/api/method/hagag_erp.whatsapp_bridge.receive_baileys_event';
 const FRAPPE_HOST = process.env.FRAPPE_HOST || 'erp.local';

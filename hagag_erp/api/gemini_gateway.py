@@ -1259,39 +1259,21 @@ def ask_gemini(question, conversation_id=None, mobile=None, pdf_base64=None, fil
                             as_pdf=True,
                         )
 
-                        payload = json.dumps(
-                            {
+                        from hagag_erp.whatsapp_bridge import call_baileys_api
+
+                        tool_result = call_baileys_api(
+                            "send",
+                            method="POST",
+                            data={
                                 "number": mobile_clean,
                                 "message": (
                                     f"مستند {document_name} "
                                     "من شركة ركن سبل الأفق للمقاولات (Elsaidy ERP)"
                                 ),
-                                "pdf_base64": base64.b64encode(
-                                    pdf
-                                ).decode("ascii"),
+                                "pdf_base64": base64.b64encode(pdf).decode("ascii"),
                                 "filename": document_name + ".pdf",
-                            }
-                        ).encode("utf-8")
-
-                        req = urllib.request.Request(
-                            "http://wa-baileys:3000/send",
-                            data=payload,
-                            headers={
-                                "Content-Type": "application/json",
-                                "Authorization": (
-                                    "Bearer HAGAG_WA_7f3c9a2d6e4b8a1c"
-                                ),
                             },
-                            method="POST",
                         )
-
-                        with urllib.request.urlopen(
-                            req,
-                            timeout=30,
-                        ) as resp:
-                            tool_result = json.loads(
-                                resp.read().decode("utf-8")
-                            )
 
                     except Exception:
                         frappe.log_error(

@@ -25,6 +25,23 @@ class ElsaidyWhatsAppHub(Document):
 	def validate(self):
 		if self.bot_phone_number:
 			self.bot_phone_number = normalize_phone_number(self.bot_phone_number)
+		if getattr(self, "connected_phone", None):
+			self.connected_phone = normalize_phone_number(self.connected_phone)
+		# Normalize all contact phones in allowlist
+		for c in (getattr(self, "allowed_direct_contacts", []) or []):
+			if getattr(c, "phone_number", None):
+				c.phone_number = normalize_phone_number(c.phone_number)
+		# Enforce strict allowlist defaults: zero auto-reply to unregistered senders
+		self.allow_unregistered_direct = 0
+		self.allow_unregistered_groups = 0
+		self.unregistered_auto_reply = ""
+
+	def on_update(self):
+		try:
+			frappe.cache().delete_value("whatsapp_active_contact_rules")
+			frappe.cache().delete_value("whatsapp_hub_settings")
+		except Exception:
+			pass
 
 	@frappe.whitelist()
 	def refresh_status(self):

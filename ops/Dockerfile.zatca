@@ -1,0 +1,44 @@
+# Pinned official upstream ERPNext base image by digest
+FROM frappe/erpnext:v16.53.0@sha256:b961d69ed3265f44f712f40be58a3e6a22c8662f61a7e1a8097765534e3e9be2
+
+USER root
+
+# Install dependencies and Adoptium Eclipse Temurin OpenJDK 11 JRE with SHA256 verification
+# Official upstream SHA256: 84cd7101f39172a4db085fb52940595bb14dad6bc3afb5bf82ee497eceaf86d3
+# Note: Debian 12/13 Bookworm/Trixie packages default-jre to OpenJDK 17; ZATCA CLI 2.10.0 strictly requires Java 11.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    ca-certificates \
+    git \
+    && mkdir -p /opt/java/temurin-11 \
+    && wget -q https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.25%2B9/OpenJDK11U-jre_x64_linux_hotspot_11.0.25_9.tar.gz -O /tmp/temurin11.tar.gz \
+    && echo "84cd7101f39172a4db085fb52940595bb14dad6bc3afb5bf82ee497eceaf86d3  /tmp/temurin11.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/temurin11.tar.gz -C /opt/java/temurin-11 --strip-components=1 \
+    && rm -f /tmp/temurin11.tar.gz \
+    && ln -s /opt/java/temurin-11/bin/java /usr/local/bin/java \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Strict verification of Java 11
+RUN java -version 2>&1 | grep "11.0."
+
+USER frappe
+
+# Clone and install pinned LavaLoon KSA Compliance release 0.62.0
+RUN git clone https://github.com/lavaloon-eg/ksa_compliance.git /home/frappe/frappe-bench/apps/ksa_compliance \
+    && cd /home/frappe/frappe-bench/apps/ksa_compliance \
+    && git checkout 39a3817e098e98066af2c1539d6ad6ed18ad0225 \
+    && /home/frappe/frappe-bench/env/bin/pip install --no-cache-dir -e /home/frappe/frappe-bench/apps/ksa_compliance
+
+# Install hagag_erp app from context
+COPY --chown=frappe:frappe . /home/frappe/frappe-bench/apps/hagag_erp
+RUN /home/frappe/frappe-bench/env/bin/pip install --no-cache-dir -e /home/frappe/frappe-bench/apps/hagag_erp
+
+# Build frontend assets for both apps
+RUN cd /home/frappe/frappe-bench \
+    && bench build --app ksa_compliance --app hagag_erp
+
+# Persistent sites volume:
+# ZATCA storage according to ksa_compliance/zatca_files.py is site-scoped:
+# - sites/<site>/zatca-files (0700, private keys 0600)
+# - sites/<site>/zatca-tools (0750)
+VOLUME ["/home/frappe/frappe-bench/sites"]

@@ -99,7 +99,6 @@
    "reqd": 1
   },
   {
-   "default": "HAGAG_WA_7f3c9a2d6e4b8a1c",
    "fieldname": "api_token",
    "fieldtype": "Password",
    "label": "رمز أمان API (Token)",

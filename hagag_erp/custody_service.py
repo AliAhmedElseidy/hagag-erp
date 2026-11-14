@@ -34,9 +34,9 @@ from hagag_erp.tax_engine import (
 
 # Known bot phone numbers that MUST NEVER be mapped to employees
 KNOWN_BOT_PHONES = {
-    "201028632620",
-    "+201028632620",
-    "00201028632620"
+    "966569589664",
+    "+966569589664",
+    "00966569589664"
 }
 
 # Arabic digits mapping
@@ -459,10 +459,28 @@ def classify_accounting_intent(text: str) -> dict:
     # 5. Intent C: Issue or replenish employee custody
     issue_custody_keywords = [
         "تم دفع عهدة", "دفع عهدة", "ارسال عهدة", "إرسال عهدة", "تحويل عهدة",
-        "صرف عهدة", "تغذية عهدة", "تجديد عهدة", "عهدة جديدة", "تسليم عهدة"
+        "صرف عهدة", "تغذية عهدة", "تجديد عهدة", "عهدة جديدة", "تسليم عهدة",
+        "تم تحويل عهدة", "تم صرف عهدة", "تم تغذية عهدة", "تم ايداع عهدة", "ايداع عهدة"
     ]
-    if _has_match(norm, issue_custody_keywords):
-        pm = "bank" if _has_match(norm, ["بنك", "تحويل", "حساب", "شيك", "شبكة"]) else "cash"
+    # Enhanced co-occurrence: disbursement verbs with custody words
+    disbursement_verbs = [
+        "تحويل", "تم تحويل", "تغذية", "تم تغذية", "صرف", "تم صرف", "ارسال",
+        "تم ارسال", "ايداع", "تم ايداع", "دفع", "تم دفع", "تسليم", "زوّد", "تزويد",
+        "حولت", "تم تحويل مبلغ", "تحويل مبلغ"
+    ]
+    custody_words = ["عهدة", "عهدته", "عهدتها", "العهدة", "عهد"]
+    expense_words = [
+        "من عهدة", "من عهدتي", "من العهدة", "خصما من", "مسددة من", "فاتورة",
+        "بنزين", "ديزل", "صيانة", "قطع غيار", "مشتريات", "شراء", "إيجار", "مصروف",
+        "سكن", "فندق", "مطعم", "إعاشة", "ضيافة"
+    ]
+
+    has_disb_verb = any(v in norm for v in disbursement_verbs)
+    has_custody = any(c in norm for c in custody_words)
+    has_expense = any(e in norm for e in expense_words)
+
+    if (_has_match(norm, issue_custody_keywords) or (has_disb_verb and has_custody and not has_expense)):
+        pm = "bank" if _has_match(norm, ["بنك", "تحويل", "حساب", "شيك", "شبكة", "أهلي", "اهلي", "snb", "مصرف"]) else "cash"
         return {
             "intent": INTENT_C_ISSUE_REPLENISH_CUSTODY,
             "amount": amount,
@@ -572,26 +590,32 @@ def get_verified_payment_account(payment_method: str, company: str = None) -> tu
     comp_name, abbr = get_target_company(company)
     comp_doc = frappe.get_doc("Company", comp_name)
 
-    if payment_method == "bank":
-        acc = comp_doc.default_bank_account or f"1201 - البنك الأهلي السعودي (SNB) - {abbr}"
+    pm = (payment_method or "cash").lower()
+
+    if pm in ("bank", "snb", "alahli", "ahli", "البنك الاهلي", "البنك الأهلي"):
+        acc = f"1201 - البنك الأهلي السعودي (SNB) - {abbr}"
         if not frappe.db.exists("Account", acc):
-            acc = frappe.db.get_value("Account", {"company": comp_name, "account_type": "Bank", "is_group": 0}, "name")
+            acc = comp_doc.default_bank_account or frappe.db.get_value("Account", {"company": comp_name, "account_type": "Bank", "is_group": 0}, "name")
         return acc, "Bank"
 
-    if payment_method == "custody":
-        # Check company-specific site custody cash account
+    if pm in ("custody", "عهدة", "عهد"):
         custody_acc = f"1120 - عهد نقدية للمهندسين والمشرفين - {abbr}"
         if frappe.db.exists("Account", custody_acc):
-            return custody_acc, "Cash"
-        # Or company default employee advance account
+            return custody_acc, "Receivable"
         if comp_doc.default_employee_advance_account:
-            return comp_doc.default_employee_advance_account, "Advance"
+            return comp_doc.default_employee_advance_account, "Receivable"
         return f"1110 - نقد - {abbr}", "Cash"
 
-    # Default to Cash
-    acc = comp_doc.default_cash_account or f"1110 - نقد - {abbr}"
+    if pm in ("advance", "salary_advance", "سلفة", "سلف"):
+        advance_acc = f"1610 - سلف الموظفين - {abbr}"
+        if frappe.db.exists("Account", advance_acc):
+            return advance_acc, "Receivable"
+        return f"1610 - سلف الموظفين - {abbr}", "Receivable"
+
+    # Default to Cash (1110)
+    acc = f"1110 - نقد - {abbr}"
     if not frappe.db.exists("Account", acc):
-        acc = frappe.db.get_value("Account", {"company": comp_name, "account_type": "Cash", "is_group": 0}, "name")
+        acc = comp_doc.default_cash_account or frappe.db.get_value("Account", {"company": comp_name, "account_type": "Cash", "is_group": 0}, "name")
     return acc, "Cash"
 
 
@@ -779,18 +803,17 @@ def simulate_custody_workflow(
         else:
             vat_info = {"status": "مستبعدة من الاسترداد", "account": None, "amount": 0.0}
 
-        # IMPORTANT: If custody_account is Cash (1120), party_type MUST BE NONE!
-        # ERPNext v16 strictly rejects party_type on Cash accounts.
+        # Custody Account (1120) with Party Type = Employee
         simulated_lines.append({
             "account": custody_account,
-            "party_type": None,
-            "party": None,
+            "party_type": "Employee" if employee_id else None,
+            "party": employee_id,
             "debit": 0.0,
             "credit": float(gross_total),
             "remark": f"تسوية عهدة الموظف: {employee_name} ({employee_id})" if employee_id else "تسوية عهدة نقدية"
         })
 
-        explanation = f"تسوية مصروف عهدة بقيمة {float(gross_total):,.2f} ريال لحساب الموظف {employee_name or employee_id}، مع قيد دائن على حساب العهد {custody_account} دون إجبار طرف على حساب النقد."
+        explanation = f"تسوية مصروف عهدة بقيمة {float(gross_total):,.2f} ريال لحساب الموظف {employee_name or employee_id}، مع قيد دائن على حساب العهد {custody_account} بربط الموظف كطرف (Employee Party)."
         post_approval_impact = {
             "custody_balance_decrease": float(gross_total),
             "expense_increase": float(net_exp),
@@ -807,11 +830,11 @@ def simulate_custody_workflow(
         source_account, source_type = get_verified_payment_account(payment_method, comp_name)
         gross_total = round_currency(amount)
 
-        # Debit: Custody Account (1120)
+        # Debit: Custody Account (1120) with Party Type = Employee
         simulated_lines.append({
             "account": custody_account,
-            "party_type": None,
-            "party": None,
+            "party_type": "Employee" if employee_id else None,
+            "party": employee_id,
             "debit": float(gross_total),
             "credit": 0.0,
             "remark": f"تغذية عهدة نقدية للموظف: {employee_name} ({employee_id})" if employee_id else "تغذية عهدة نقدية"
@@ -989,14 +1012,21 @@ def get_employee_live_gl_balance(employee: str = None, company: str = None) -> d
         "unposted_draft_advances": 0.0
     }
 
-    # 1. Posted GL Entries for Custody Account (1120)
-    # Notice: 1120 has no party_type. So we check user_remark or GL Entries for 1120
+    # 1. Posted GL Entries for Custody Account (1120) with Party Type = Employee
     if frappe.db.exists("Account", custody_account):
-        gl_rows = frappe.db.sql("""
-            SELECT SUM(debit) as total_debit, SUM(credit) as total_credit, COUNT(name) as count
-            FROM `tabGL Entry`
-            WHERE account = %s AND company = %s AND is_cancelled = 0
-        """, (custody_account, comp_name), as_dict=True)
+        if employee:
+            gl_rows = frappe.db.sql("""
+                SELECT SUM(debit) as total_debit, SUM(credit) as total_credit, COUNT(name) as count
+                FROM `tabGL Entry`
+                WHERE account = %s AND company = %s AND is_cancelled = 0
+                  AND ((party_type = 'Employee' AND party = %s) OR (party IS NULL AND remarks LIKE %s))
+            """, (custody_account, comp_name, employee, f"%{employee}%"), as_dict=True)
+        else:
+            gl_rows = frappe.db.sql("""
+                SELECT SUM(debit) as total_debit, SUM(credit) as total_credit, COUNT(name) as count
+                FROM `tabGL Entry`
+                WHERE account = %s AND company = %s AND is_cancelled = 0
+            """, (custody_account, comp_name), as_dict=True)
         if gl_rows and gl_rows[0].get("total_debit") is not None:
             dr = flt(gl_rows[0].total_debit)
             cr = flt(gl_rows[0].total_credit)
@@ -1568,6 +1598,18 @@ def send_custody_whatsapp_notification(
             frappe.logger("custody_notification").warn(f"[SendBlocked] Refusing to notify bot handset: {norm_phone}")
             return {"status": "ignored", "reason": "Target is bot number"}
 
+        # Prevent duplicate WhatsApp notification for the same document
+        if doctype and docname and frappe.db.table_exists("Elsaidy WhatsApp Log"):
+            existing_log = frappe.db.get_value("Elsaidy WhatsApp Log", {
+                "linked_document_type": doctype,
+                "linked_document_name": docname,
+                "direction": "Outgoing",
+                "delivery_status": ["in", ["Sent", "Delivered", "Replied"]]
+            }, "name")
+            if existing_log:
+                frappe.logger("custody_notification").info(f"Skipping duplicate WhatsApp notification for {doctype} {docname}: already recorded in {existing_log}")
+                return {"status": "skipped", "reason": "Already notified", "existing_log": existing_log}
+
         payload = {
             "jid": jid,
             "message": message
@@ -1591,7 +1633,11 @@ def send_custody_whatsapp_notification(
                 log_doc.linked_document_type = doctype
                 log_doc.linked_document_name = docname
                 log_doc.insert(ignore_permissions=True)
-                frappe.db.commit()
+                if not getattr(frappe.flags, "in_insert", False) and not getattr(frappe.flags, "in_submit", False):
+                    try:
+                        frappe.db.commit()
+                    except Exception:
+                        pass
             except Exception as log_err:
                 frappe.logger("custody_notification").error(f"Failed to record WhatsApp notification log: {log_err}")
 
@@ -1774,10 +1820,17 @@ def notify_employee_custody_event(doc, method=None) -> dict:
         posted_custody = live_bal.get("posted_custody_balance", 0.0)
         posted_advance = live_bal.get("posted_salary_advance_balance", 0.0)
 
+        # Clean purpose: strip internal OP-PREV codes from employee-facing messages
+        clean_purpose = re.sub(r"\[OP-PREV[^\]]*\]", "", purpose or "").strip()
+        if not clean_purpose:
+            clean_purpose = purpose or "تسوية قيد محاسبي معتمد"
+
         if "سلفة" in title or doctype == "Additional Salary":
-            balance_line = f"📊 *رصيد السلف المقيد المتبقي:* `{posted_advance:,.2f}` ريال"
+            balance_line = f"📊 *رصيد السلف المقيد:* `{posted_advance:,.2f}` ريال"
+        elif "تغذية" in title or "إضافة" in title:
+            balance_line = f"📊 *رصيد العهدة الفعلي بعد الإيداع:* `{posted_custody:,.2f}` ريال"
         else:
-            balance_line = f"📊 *رصيد العهدة المقيد المتبقي:* `{posted_custody:,.2f}` ريال"
+            balance_line = f"📊 *رصيد العهدة المتبقي بعد الخصم:* `{posted_custody:,.2f}` ريال"
 
         # Saudi Time (12-hour Asia/Riyadh format)
         try:
@@ -1799,7 +1852,7 @@ def notify_employee_custody_event(doc, method=None) -> dict:
             f"💰 *المبلغ:* {float(amount):,.2f} ريال سعودي\n"
             f"📄 *المستند:* `{doc.name}` ({doc_date})\n"
             f"⏰ *التوقيت:* {saudi_time}\n"
-            f"📝 *البيان:* {purpose}\n"
+            f"📝 *البيان:* {clean_purpose}\n"
             f"{balance_line}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🏢 *الشركة:* {comp or 'ركن سبل الأفق'}\n"

@@ -82,7 +82,7 @@
 
     // 3. Desktop App Launcher Layout & Label Polishing
     function fixDesktopLauncher() {
-        // Inject override CSS once
+        // Inject override CSS once into head
         if (!document.getElementById('elsaidy-desktop-override-style')) {
             var st = document.createElement('style');
             st.id = 'elsaidy-desktop-override-style';
@@ -92,6 +92,7 @@
                     max-width: 960px !important;
                     margin: 0 auto !important;
                     gap: 16px !important;
+                    row-gap: 20px !important;
                 }
                 body.desktop-page .desktop-icon,
                 .desktop-icon {
@@ -99,11 +100,14 @@
                     min-width: 125px !important;
                     height: auto !important;
                     min-height: 115px !important;
+                    padding: 8px 4px !important;
                 }
                 body.desktop-page .desktop-icon .icon-caption,
                 .desktop-icon .icon-caption {
                     width: 100% !important;
                     max-width: 100% !important;
+                    height: auto !important;
+                    min-height: 34px !important;
                     white-space: normal !important;
                     text-wrap: wrap !important;
                     display: flex !important;
@@ -144,7 +148,7 @@
             var href = link ? (link.getAttribute('href') || '') : '';
             var html = icon.innerHTML || '';
 
-            // 1. Helpdesk / Support Missing Label
+            // 1. Helpdesk / Support Missing Label Fix
             if (href.indexOf('helpdesk') !== -1 || html.indexOf('helpdesk') !== -1) {
                 var hdLabel = isRTL ? 'خدمة العملاء والدعم' : 'Elsaidy Support';
                 var titleLink = caption.querySelector('.icon-title');
@@ -152,10 +156,11 @@
                     caption.innerHTML = '<a class="icon-title" href="/helpdesk" data-toggle="tooltip" data-original-title="' + hdLabel + '">' + hdLabel + '</a>';
                 } else if (!titleLink.textContent.trim()) {
                     titleLink.textContent = hdLabel;
+                    titleLink.setAttribute('data-original-title', hdLabel);
                 }
             }
 
-            // 2. Builder Label (concise to prevent any overflow)
+            // 2. Builder Label (Ensure concise label that fits without ellipsis)
             if (href.indexOf('builder') !== -1) {
                 var bLink = caption.querySelector('.icon-title');
                 if (bLink) {
@@ -163,7 +168,7 @@
                 }
             }
 
-            // 3. Insights Label (concise to prevent any overflow)
+            // 3. Insights Label (Ensure concise label that fits without ellipsis)
             if (href.indexOf('insights') !== -1) {
                 var iLink = caption.querySelector('.icon-title');
                 if (iLink) {
@@ -171,6 +176,16 @@
                 }
             }
         });
+    }
+
+    function monitorDesktop() {
+        fixDesktopLauncher();
+        var count = 0;
+        var t = setInterval(function () {
+            count++;
+            fixDesktopLauncher();
+            if (count > 25) clearInterval(t);
+        }, 150);
     }
 
     // Debounced safe DOM sweep
@@ -181,25 +196,23 @@
             dismissOnboarding();
             purgeOnboardingDOM();
             sanitizeDocumentTitle();
-            fixDesktopLauncher();
+            monitorDesktop();
         }, 100);
     }
 
-    // Listen to route changes rather than continuous characterData mutations
+    // Run on startup and on all navigation events
+    monitorDesktop();
+
     if (window.frappe && frappe.router) {
         frappe.router.on('change', scheduleSweep);
     }
     window.addEventListener('DOMContentLoaded', scheduleSweep);
 
     if (window.$ && $(document).on) {
-        $(document).on('desktop_screen', function () {
-            fixDesktopLauncher();
-            setTimeout(fixDesktopLauncher, 100);
-            setTimeout(fixDesktopLauncher, 300);
-        });
+        $(document).on('desktop_screen', monitorDesktop);
     }
 
-    // Throttled observer strictly for modal/body popups (childList only, no characterData)
+    // Observe body for modals and dynamic desktop container mounting
     var modalObserver = new MutationObserver(function (mutations) {
         for (var i = 0; i < mutations.length; i++) {
             var m = mutations[i];
@@ -212,13 +225,6 @@
                         node.classList.contains('shepherd-element')
                     )) {
                         node.style.setProperty('display', 'none', 'important');
-                    }
-                    if (node.classList && (
-                        node.classList.contains('desktop-icon') ||
-                        node.classList.contains('icons-container') ||
-                        node.classList.contains('desktop-wrapper')
-                    )) {
-                        fixDesktopLauncher();
                     }
                 }
             }

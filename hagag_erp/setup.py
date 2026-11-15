@@ -2845,52 +2845,59 @@ def cleanup_test_draft():
 def update_desktop_icons_concise():
     """
     Ensure all desktop icons have concise labels that fit cleanly without ellipsis.
+    Cleans up any duplicates.
     """
-    targets = {
-        "ERPNext": "إدارة الأعمال",
-        "Frappe HR": "الموارد البشرية",
-        "CRM": "علاقات العملاء",
-        "Frappe CRM": "علاقات العملاء",
-        "Wiki": "قاعدة المعرفة",
-        "Raven": "المساعد الذكي",
-        "Frappe Framework": "النظام الأساسي",
-        "Helpdesk": "خدمة العملاء",
-        "Builder": "بناء المواقع",
-        "Insights": "تحليلات الأعمال",
-    }
-    for d in frappe.get_all("Desktop Icon", fields=["name", "label", "link"]):
-        lbl = d.label or ""
-        target = None
-        if "ERP" in lbl or "الأعمال" in lbl:
-            target = "إدارة الأعمال"
-        elif "HR" in lbl or "البشرية" in lbl:
-            target = "الموارد البشرية"
-        elif "CRM" in lbl or "علاقات" in lbl:
-            target = "علاقات العملاء"
-        elif "Wiki" in lbl or "المعرفة" in lbl:
-            target = "قاعدة المعرفة"
-        elif "AI" in lbl or "Raven" in lbl or "الذكي" in lbl:
-            target = "المساعد الذكي"
-        elif "Core" in lbl or "Framework" in lbl or "الأساسي" in lbl:
-            target = "النظام الأساسي"
-        elif "Helpdesk" in lbl or "الدعم" in lbl or "العملاء" in lbl:
-            target = "خدمة العملاء"
-        elif "Builder" in lbl or "المواقع" in lbl:
-            target = "بناء المواقع"
-        elif "Insights" in lbl or "التحليلات" in lbl:
-            target = "تحليلات الأعمال"
+    rows = frappe.db.sql("SELECT name, label, link FROM `tabDesktop Icon`", as_dict=True)
+    print("CURRENT ROWS IN tabDesktop Icon:")
+    for r in rows:
+        print(f"  {r.name} | {r.label} | {r.link}")
 
-        if target and target != lbl:
-            # Check if another record already has this label
-            existing = frappe.db.get_value("Desktop Icon", {"label": target}, "name")
-            if not existing:
-                frappe.db.set_value("Desktop Icon", d.name, "label", target)
-            elif existing == d.name:
-                pass
+    # Desired canonical labels
+    mapping = {
+        "erp": "إدارة الأعمال",
+        "hrms": "الموارد البشرية",
+        "hr": "الموارد البشرية",
+        "crm": "علاقات العملاء",
+        "helpdesk": "خدمة العملاء",
+        "builder": "بناء المواقع",
+        "insights": "تحليلات الأعمال",
+        "wiki": "قاعدة المعرفة",
+        "raven": "المساعد الذكي",
+        "ai": "المساعد الذكي",
+        "core": "النظام الأساسي",
+        "frappe": "النظام الأساسي",
+    }
+
+    # Clean duplicates first
+    seen = {}
+    for r in rows:
+        lbl = r.label or ""
+        target = None
+        for k, v in mapping.items():
+            if k in (r.link or "").lower() or k in lbl.lower():
+                target = v
+                break
+        if not target:
+            if "الأعمال" in lbl: target = "إدارة الأعمال"
+            elif "البشرية" in lbl: target = "الموارد البشرية"
+            elif "علاقات" in lbl: target = "علاقات العملاء"
+            elif "المعرفة" in lbl: target = "قاعدة المعرفة"
+            elif "الذكي" in lbl: target = "المساعد الذكي"
+            elif "الأساسي" in lbl: target = "النظام الأساسي"
+
+        if target:
+            if target in seen:
+                # Duplicate record for this app! Delete older/duplicate record
+                print(f"Deleting duplicate Desktop Icon: {r.name} (label: {lbl}, target: {target})")
+                frappe.db.sql("DELETE FROM `tabDesktop Icon` WHERE name = %s", (r.name,))
             else:
-                # Add unique suffix if needed
-                pass
+                seen[target] = r.name
+                frappe.db.sql("UPDATE `tabDesktop Icon` SET label = %s WHERE name = %s", (target, r.name))
+
     frappe.db.commit()
+    print("FINAL ROWS IN tabDesktop Icon:")
+    for r in frappe.db.sql("SELECT name, label, link FROM `tabDesktop Icon`", as_dict=True):
+        print(f"  {r.name} | {r.label} | {r.link}")
 
 
 def extend_bootinfo(bootinfo):

@@ -2880,11 +2880,11 @@ def update_desktop_icons_concise():
             frappe.db.sql("UPDATE `tabDesktop Icon` SET label = %s WHERE name = %s", (lbl, name))
 
     # Also clean any remaining parenthetical labels
-    frappe.db.sql("UPDATE `tabDesktop Icon` SET label = 'المساعد الذكي' WHERE name = 'Raven' OR (label LIKE '%الذكي%' AND link IS NOT NULL)")
+    frappe.db.sql("UPDATE `tabDesktop Icon` SET label = 'المساعد الذكي' WHERE name LIKE '%Raven%' OR label LIKE '%Raven%' OR label LIKE '%الذكي%' OR name LIKE '%AI%'")
     frappe.db.commit()
 
     print("UPDATED DESKTOP ICONS SUCCESSFULLY:")
-    for r in frappe.db.sql("SELECT name, label, link FROM `tabDesktop Icon` WHERE link IS NOT NULL", as_dict=True):
+    for r in frappe.db.sql("SELECT name, label, link FROM `tabDesktop Icon` WHERE label IN ('إدارة الأعمال', 'النظام الأساسي', 'بناء المواقع', 'علاقات العملاء', 'الموارد البشرية', 'خدمة العملاء', 'تحليلات الأعمال', 'قاعدة المعرفة', 'المساعد الذكي')", as_dict=True):
         print(f"  APP ICON: {r.name} -> {r.label} ({r.link})")
 
 

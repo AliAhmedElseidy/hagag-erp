@@ -80,6 +80,99 @@
         });
     }
 
+    // 3. Desktop App Launcher Layout & Label Polishing
+    function fixDesktopLauncher() {
+        // Inject override CSS once
+        if (!document.getElementById('elsaidy-desktop-override-style')) {
+            var st = document.createElement('style');
+            st.id = 'elsaidy-desktop-override-style';
+            st.textContent = `
+                body.desktop-page .desktop-container > .icons-container > .icons {
+                    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)) !important;
+                    max-width: 960px !important;
+                    margin: 0 auto !important;
+                    gap: 16px !important;
+                }
+                body.desktop-page .desktop-icon,
+                .desktop-icon {
+                    width: 135px !important;
+                    min-width: 125px !important;
+                    height: auto !important;
+                    min-height: 115px !important;
+                }
+                body.desktop-page .desktop-icon .icon-caption,
+                .desktop-icon .icon-caption {
+                    width: 100% !important;
+                    max-width: 100% !important;
+                    white-space: normal !important;
+                    text-wrap: wrap !important;
+                    display: flex !important;
+                    flex-direction: column !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    text-align: center !important;
+                }
+                body.desktop-page .desktop-icon .icon-title,
+                body.desktop-page a.icon-title,
+                .desktop-icon .icon-title {
+                    width: 100% !important;
+                    white-space: normal !important;
+                    word-break: break-word !important;
+                    line-height: 1.25 !important;
+                    font-size: 13px !important;
+                    font-weight: 500 !important;
+                    text-overflow: unset !important;
+                    display: -webkit-box !important;
+                    -webkit-line-clamp: 2 !important;
+                    -webkit-box-orient: vertical !important;
+                    text-align: center !important;
+                }
+            `;
+            (document.head || document.documentElement).appendChild(st);
+        }
+
+        var icons = document.querySelectorAll('.desktop-icon');
+        if (!icons || !icons.length) return;
+
+        var isRTL = document.documentElement.dir === 'rtl' || (window.frappe && frappe.boot && frappe.boot.lang === 'ar');
+
+        icons.forEach(function (icon) {
+            var caption = icon.querySelector('.icon-caption');
+            if (!caption) return;
+
+            var link = icon.querySelector('a.icon-link') || icon.querySelector('a[href]');
+            var href = link ? (link.getAttribute('href') || '') : '';
+            var html = icon.innerHTML || '';
+
+            // 1. Helpdesk / Support Missing Label
+            if (href.indexOf('helpdesk') !== -1 || html.indexOf('helpdesk') !== -1) {
+                var hdLabel = isRTL ? 'خدمة العملاء والدعم' : 'Elsaidy Support';
+                var titleLink = caption.querySelector('.icon-title');
+                if (!titleLink) {
+                    caption.innerHTML = '<a class="icon-title" href="/helpdesk" data-toggle="tooltip" data-original-title="' + hdLabel + '">' + hdLabel + '</a>';
+                } else if (!titleLink.textContent.trim()) {
+                    titleLink.textContent = hdLabel;
+                }
+            }
+
+            // 2. Builder Label (concise to prevent any overflow)
+            if (href.indexOf('builder') !== -1) {
+                var bLink = caption.querySelector('.icon-title');
+                if (bLink) {
+                    bLink.textContent = isRTL ? 'بناء وتصميم المواقع' : 'Builder';
+                }
+            }
+
+            // 3. Insights Label (concise to prevent any overflow)
+            if (href.indexOf('insights') !== -1) {
+                var iLink = caption.querySelector('.icon-title');
+                if (iLink) {
+                    iLink.textContent = isRTL ? 'تحليلات الأعمال (BI)' : 'Insights';
+                }
+            }
+        });
+    }
+
     // Debounced safe DOM sweep
     var sweepTimeout = null;
     function scheduleSweep() {
@@ -88,7 +181,8 @@
             dismissOnboarding();
             purgeOnboardingDOM();
             sanitizeDocumentTitle();
-        }, 150);
+            fixDesktopLauncher();
+        }, 100);
     }
 
     // Listen to route changes rather than continuous characterData mutations
@@ -96,6 +190,14 @@
         frappe.router.on('change', scheduleSweep);
     }
     window.addEventListener('DOMContentLoaded', scheduleSweep);
+
+    if (window.$ && $(document).on) {
+        $(document).on('desktop_screen', function () {
+            fixDesktopLauncher();
+            setTimeout(fixDesktopLauncher, 100);
+            setTimeout(fixDesktopLauncher, 300);
+        });
+    }
 
     // Throttled observer strictly for modal/body popups (childList only, no characterData)
     var modalObserver = new MutationObserver(function (mutations) {
@@ -110,6 +212,13 @@
                         node.classList.contains('shepherd-element')
                     )) {
                         node.style.setProperty('display', 'none', 'important');
+                    }
+                    if (node.classList && (
+                        node.classList.contains('desktop-icon') ||
+                        node.classList.contains('icons-container') ||
+                        node.classList.contains('desktop-wrapper')
+                    )) {
+                        fixDesktopLauncher();
                     }
                 }
             }

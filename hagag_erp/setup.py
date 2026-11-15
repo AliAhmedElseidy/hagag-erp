@@ -2911,5 +2911,20 @@ def extend_bootinfo(bootinfo):
         elif name == "crm":
             app["app_title"] = "علاقات العملاء" if lang == "ar" else "CRM"
             app["title"] = app["app_title"]
+        elif name == "raven":
+            app["app_title"] = "المساعد الذكي" if lang == "ar" else "Raven AI"
+            app["title"] = app["app_title"]
+        elif name == "erpnext":
+            app["app_title"] = "إدارة الأعمال" if lang == "ar" else "ERP"
+            app["title"] = app["app_title"]
+        elif name == "hrms":
+            app["app_title"] = "الموارد البشرية" if lang == "ar" else "HR"
+            app["title"] = app["app_title"]
+        elif name == "wiki":
+            app["app_title"] = "قاعدة المعرفة" if lang == "ar" else "Wiki"
+            app["title"] = app["app_title"]
+        elif name == "frappe":
+            app["app_title"] = "النظام الأساسي" if lang == "ar" else "Core"
+            app["title"] = app["app_title"]
 
 

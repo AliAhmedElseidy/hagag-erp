@@ -144,17 +144,11 @@
             if (!caption) return;
 
             // 1. Helpdesk Missing Caption Fix
-            if (href.indexOf('/helpdesk') !== -1 || (icon.innerHTML && icon.innerHTML.indexOf('helpdesk') !== -1)) {
+            if (href.indexOf('helpdesk') !== -1 || (icon.innerHTML && icon.innerHTML.indexOf('helpdesk') !== -1)) {
                 var helpdeskLabel = isRTL ? 'خدمة العملاء والدعم' : 'Elsaidy Support';
                 var titleLink = caption.querySelector('.icon-title');
                 if (!titleLink) {
-                    var a = document.createElement('a');
-                    a.className = 'icon-title';
-                    a.href = href || '/helpdesk';
-                    a.setAttribute('data-toggle', 'tooltip');
-                    a.setAttribute('data-original-title', helpdeskLabel);
-                    a.textContent = helpdeskLabel;
-                    caption.appendChild(a);
+                    caption.innerHTML = '<a class="icon-title" href="' + (href || '/helpdesk') + '" data-toggle="tooltip" data-original-title="' + helpdeskLabel + '">' + helpdeskLabel + '</a>';
                 } else if (!titleLink.textContent.trim()) {
                     titleLink.textContent = helpdeskLabel;
                     titleLink.setAttribute('data-original-title', helpdeskLabel);
@@ -214,4 +208,11 @@
             setTimeout(fixDesktopAppLauncher, 1000);
         });
     }
+
+    // Continuous polling check while on /desk
+    setInterval(function() {
+        if (document.querySelector('.desktop-icon')) {
+            fixDesktopAppLauncher();
+        }
+    }, 400);
 })();

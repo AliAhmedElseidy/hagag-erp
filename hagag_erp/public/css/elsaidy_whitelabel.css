@@ -62,22 +62,32 @@ a[href*="hagagco.com"],
 }
 
 /* 6. Desktop App Launcher Layout & Zero Ellipsis / Truncation */
+body.desktop-page .desktop-icon,
 .desktop-icon {
     min-width: 95px !important;
 }
+body.desktop-page .desktop-icon .icon-caption,
+body.desktop-page .icon-caption,
 .desktop-icon .icon-caption {
     width: auto !important;
     min-width: 95px !important;
     max-width: 140px !important;
     white-space: normal !important;
+    text-wrap: wrap !important;
     overflow: visible !important;
     text-overflow: clip !important;
     line-height: 1.25 !important;
     text-align: center !important;
     padding: 0 2px !important;
+    height: auto !important;
+    min-height: 35px !important;
 }
+body.desktop-page .desktop-icon .icon-title,
+body.desktop-page .icon-title,
+body.desktop-page a.icon-title,
 .desktop-icon .icon-title {
     white-space: normal !important;
+    text-wrap: wrap !important;
     overflow: visible !important;
     text-overflow: clip !important;
     display: inline-block !important;

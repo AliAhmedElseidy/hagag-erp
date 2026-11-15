@@ -71,12 +71,9 @@ body.desktop-page .desktop-icon .icon-title,
     line-height: 1.25 !important;
     font-size: 13px !important;
     font-weight: 500 !important;
-    max-height: 2.8em !important;
-    overflow: hidden !important;
-    text-overflow: unset !important;
-    display: -webkit-box !important;
-    -webkit-line-clamp: 2 !important;
-    -webkit-box-orient: vertical !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    display: inline-block !important;
     color: #1e293b !important;
     text-align: center !important;
 }

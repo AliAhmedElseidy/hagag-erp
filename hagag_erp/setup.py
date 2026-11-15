@@ -2881,7 +2881,15 @@ def update_desktop_icons_concise():
             target = "تحليلات الأعمال"
 
         if target and target != lbl:
-            frappe.db.set_value("Desktop Icon", d.name, "label", target)
+            # Check if another record already has this label
+            existing = frappe.db.get_value("Desktop Icon", {"label": target}, "name")
+            if not existing:
+                frappe.db.set_value("Desktop Icon", d.name, "label", target)
+            elif existing == d.name:
+                pass
+            else:
+                # Add unique suffix if needed
+                pass
     frappe.db.commit()
 
 

@@ -2845,59 +2845,47 @@ def cleanup_test_draft():
 def update_desktop_icons_concise():
     """
     Ensure all desktop icons have concise labels that fit cleanly without ellipsis.
-    Cleans up any duplicates.
+    Sets distinct labels for apps vs workspaces to respect unique key constraint.
     """
-    rows = frappe.db.sql("SELECT name, label, link FROM `tabDesktop Icon`", as_dict=True)
-    print("CURRENT ROWS IN tabDesktop Icon:")
-    for r in rows:
-        print(f"  {r.name} | {r.label} | {r.link}")
-
-    # Desired canonical labels
-    mapping = {
-        "erp": "إدارة الأعمال",
-        "hrms": "الموارد البشرية",
-        "hr": "الموارد البشرية",
-        "crm": "علاقات العملاء",
-        "helpdesk": "خدمة العملاء",
-        "builder": "بناء المواقع",
-        "insights": "تحليلات الأعمال",
-        "wiki": "قاعدة المعرفة",
-        "raven": "المساعد الذكي",
-        "ai": "المساعد الذكي",
-        "core": "النظام الأساسي",
-        "frappe": "النظام الأساسي",
+    specific_updates = {
+        "ERPNext": "إدارة الأعمال",
+        "ERPNext Settings": "إعدادات إدارة الأعمال",
+        "Frappe HR": "الموارد البشرية",
+        "HR Setup": "إعدادات الموارد البشرية",
+        "Frappe CRM": "علاقات العملاء",
+        "CRM": "إعدادات علاقات العملاء",
+        "Insights": "تحليلات الأعمال",
+        "Helpdesk": "خدمة العملاء",
+        "Frappe Builder": "بناء المواقع",
+        "Wiki": "قاعدة المعرفة",
+        "Framework": "النظام الأساسي",
+        "Raven": "المساعد الذكي",
     }
 
-    # Clean duplicates first
-    seen = {}
-    for r in rows:
-        lbl = r.label or ""
-        target = None
-        for k, v in mapping.items():
-            if k in (r.link or "").lower() or k in lbl.lower():
-                target = v
-                break
-        if not target:
-            if "الأعمال" in lbl: target = "إدارة الأعمال"
-            elif "البشرية" in lbl: target = "الموارد البشرية"
-            elif "علاقات" in lbl: target = "علاقات العملاء"
-            elif "المعرفة" in lbl: target = "قاعدة المعرفة"
-            elif "الذكي" in lbl: target = "المساعد الذكي"
-            elif "الأساسي" in lbl: target = "النظام الأساسي"
-
-        if target:
-            if target in seen:
-                # Duplicate record for this app! Delete older/duplicate record
-                print(f"Deleting duplicate Desktop Icon: {r.name} (label: {lbl}, target: {target})")
-                frappe.db.sql("DELETE FROM `tabDesktop Icon` WHERE name = %s", (r.name,))
-            else:
-                seen[target] = r.name
-                frappe.db.sql("UPDATE `tabDesktop Icon` SET label = %s WHERE name = %s", (target, r.name))
-
+    # First update workspaces to unique labels to free up canonical names
+    free_names = {
+        "HR Setup": "إعدادات الموارد البشرية",
+        "CRM": "إعدادات علاقات العملاء",
+        "ERPNext Settings": "إعدادات إدارة الأعمال",
+        "Insights": "تحليلات الأعمال",
+    }
+    for name, lbl in free_names.items():
+        if frappe.db.exists("Desktop Icon", name):
+            frappe.db.sql("UPDATE `tabDesktop Icon` SET label = %s WHERE name = %s", (lbl, name))
     frappe.db.commit()
-    print("FINAL ROWS IN tabDesktop Icon:")
-    for r in frappe.db.sql("SELECT name, label, link FROM `tabDesktop Icon`", as_dict=True):
-        print(f"  {r.name} | {r.label} | {r.link}")
+
+    # Now update apps to clean canonical labels
+    for name, lbl in specific_updates.items():
+        if frappe.db.exists("Desktop Icon", name):
+            frappe.db.sql("UPDATE `tabDesktop Icon` SET label = %s WHERE name = %s", (lbl, name))
+
+    # Also clean any remaining parenthetical labels
+    frappe.db.sql("UPDATE `tabDesktop Icon` SET label = 'المساعد الذكي' WHERE name = 'Raven' OR (label LIKE '%الذكي%' AND link IS NOT NULL)")
+    frappe.db.commit()
+
+    print("UPDATED DESKTOP ICONS SUCCESSFULLY:")
+    for r in frappe.db.sql("SELECT name, label, link FROM `tabDesktop Icon` WHERE link IS NOT NULL", as_dict=True):
+        print(f"  APP ICON: {r.name} -> {r.label} ({r.link})")
 
 
 def extend_bootinfo(bootinfo):

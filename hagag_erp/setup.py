@@ -2842,6 +2842,49 @@ def cleanup_test_draft():
     print("Series counter for ACC-JV-2026- reset to 0 successfully.")
 
 
+def update_desktop_icons_concise():
+    """
+    Ensure all desktop icons have concise labels that fit cleanly without ellipsis.
+    """
+    targets = {
+        "ERPNext": "إدارة الأعمال",
+        "Frappe HR": "الموارد البشرية",
+        "CRM": "علاقات العملاء",
+        "Frappe CRM": "علاقات العملاء",
+        "Wiki": "قاعدة المعرفة",
+        "Raven": "المساعد الذكي",
+        "Frappe Framework": "النظام الأساسي",
+        "Helpdesk": "خدمة العملاء",
+        "Builder": "بناء المواقع",
+        "Insights": "تحليلات الأعمال",
+    }
+    for d in frappe.get_all("Desktop Icon", fields=["name", "label", "link"]):
+        lbl = d.label or ""
+        target = None
+        if "ERP" in lbl or "الأعمال" in lbl:
+            target = "إدارة الأعمال"
+        elif "HR" in lbl or "البشرية" in lbl:
+            target = "الموارد البشرية"
+        elif "CRM" in lbl or "علاقات" in lbl:
+            target = "علاقات العملاء"
+        elif "Wiki" in lbl or "المعرفة" in lbl:
+            target = "قاعدة المعرفة"
+        elif "AI" in lbl or "Raven" in lbl or "الذكي" in lbl:
+            target = "المساعد الذكي"
+        elif "Core" in lbl or "Framework" in lbl or "الأساسي" in lbl:
+            target = "النظام الأساسي"
+        elif "Helpdesk" in lbl or "الدعم" in lbl or "العملاء" in lbl:
+            target = "خدمة العملاء"
+        elif "Builder" in lbl or "المواقع" in lbl:
+            target = "بناء المواقع"
+        elif "Insights" in lbl or "التحليلات" in lbl:
+            target = "تحليلات الأعمال"
+
+        if target and target != lbl:
+            frappe.db.set_value("Desktop Icon", d.name, "label", target)
+    frappe.db.commit()
+
+
 def extend_bootinfo(bootinfo):
     """
     Standard Frappe hook to polish app titles and desktop metadata
@@ -2852,7 +2895,7 @@ def extend_bootinfo(bootinfo):
     for app in bootinfo.get("app_data", []):
         name = app.get("app_name") or app.get("name")
         if name == "helpdesk":
-            app["app_title"] = "خدمة العملاء والدعم" if lang == "ar" else "Elsaidy Support"
+            app["app_title"] = "خدمة العملاء" if lang == "ar" else "Support"
             app["title"] = app["app_title"]
         elif name == "builder":
             app["app_title"] = "بناء المواقع" if lang == "ar" else "Builder"
@@ -2861,7 +2904,7 @@ def extend_bootinfo(bootinfo):
             app["app_title"] = "تحليلات الأعمال" if lang == "ar" else "Insights"
             app["title"] = app["app_title"]
         elif name == "crm":
-            app["app_title"] = "إدارة علاقات العملاء" if lang == "ar" else "Elsaidy CRM"
+            app["app_title"] = "علاقات العملاء" if lang == "ar" else "CRM"
             app["title"] = app["app_title"]
 
 

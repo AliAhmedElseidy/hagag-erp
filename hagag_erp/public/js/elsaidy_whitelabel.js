@@ -150,7 +150,7 @@
 
             // 1. Helpdesk / Support Missing Label Fix
             if (href.indexOf('helpdesk') !== -1 || html.indexOf('helpdesk') !== -1 || html.indexOf('favicon.svg') !== -1 || html.indexOf('helpdesk/desk') !== -1) {
-                var hdLabel = isRTL ? 'خدمة العملاء والدعم' : 'Elsaidy Support';
+                var hdLabel = isRTL ? 'خدمة العملاء' : 'Elsaidy Support';
                 var titleLink = caption.querySelector('.icon-title');
                 if (!titleLink) {
                     caption.innerHTML = '<a class="icon-title" href="/helpdesk" data-toggle="tooltip" data-original-title="' + hdLabel + '">' + hdLabel + '</a>';
@@ -160,19 +160,25 @@
                 }
             }
 
-            // 2. Builder Label (Ensure concise label that fits without ellipsis)
-            if (href.indexOf('builder') !== -1) {
-                var bLink = caption.querySelector('.icon-title');
-                if (bLink) {
-                    bLink.textContent = isRTL ? 'بناء وتصميم المواقع' : 'Builder';
-                }
-            }
-
-            // 3. Insights Label (Ensure concise label that fits without ellipsis)
-            if (href.indexOf('insights') !== -1) {
-                var iLink = caption.querySelector('.icon-title');
-                if (iLink) {
-                    iLink.textContent = isRTL ? 'تحليلات الأعمال (BI)' : 'Insights';
+            // 2. Concise Clean Titles to Eliminate Any Truncation
+            var tLink = caption.querySelector('.icon-title');
+            if (tLink) {
+                var curText = tLink.textContent.trim();
+                var cleanMap = {
+                    'إدارة الأعمال (ERP)': 'إدارة الأعمال',
+                    'الموارد البشرية (HR)': 'الموارد البشرية',
+                    'إدارة علاقات العملاء (CRM)': 'علاقات العملاء',
+                    'إدارة علاقات العملاء': 'علاقات العملاء',
+                    'خدمة العملاء والدعم': 'خدمة العملاء',
+                    'قاعدة المعرفة والتوثيق': 'قاعدة المعرفة',
+                    'المساعد الذكي (AI)': 'المساعد الذكي',
+                    'النظام الأساسي (Core)': 'النظام الأساسي',
+                    'بناء وتصميم المواقع': 'بناء المواقع',
+                    'تحليلات الأعمال (BI)': 'تحليلات الأعمال'
+                };
+                if (cleanMap[curText]) {
+                    tLink.textContent = cleanMap[curText];
+                    tLink.setAttribute('data-original-title', cleanMap[curText]);
                 }
             }
         });

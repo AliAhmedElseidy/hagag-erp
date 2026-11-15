@@ -145,7 +145,7 @@
 
             // 1. Helpdesk Missing Caption Fix
             if (href.indexOf('helpdesk') !== -1 || (icon.innerHTML && icon.innerHTML.indexOf('helpdesk') !== -1)) {
-                var helpdeskLabel = isRTL ? 'خدمة العملاء والدعم' : 'Elsaidy Support';
+                var helpdeskLabel = isRTL ? 'خدمة العملاء' : 'Elsaidy Support';
                 var titleLink = caption.querySelector('.icon-title');
                 if (!titleLink) {
                     caption.innerHTML = '<a class="icon-title" href="' + (href || '/helpdesk') + '" data-toggle="tooltip" data-original-title="' + helpdeskLabel + '">' + helpdeskLabel + '</a>';
@@ -155,29 +155,25 @@
                 }
             }
 
-            // 2. CRM Label Polish
-            if (href.indexOf('/crm') !== -1 || href.indexOf('/fcrm') !== -1) {
-                var crmLabel = isRTL ? 'إدارة علاقات العملاء' : 'Elsaidy CRM';
-                var crmLink = caption.querySelector('.icon-title');
-                if (crmLink && (crmLink.textContent.trim() === 'CRM' || !crmLink.textContent.trim())) {
-                    crmLink.textContent = crmLabel;
-                    crmLink.setAttribute('data-original-title', crmLabel);
-                }
-            }
-
-            // 3. Builder Label Polish in RTL
-            if (href.indexOf('builder') !== -1 && isRTL) {
-                var bLink = caption.querySelector('.icon-title');
-                if (bLink && bLink.textContent.indexOf('Builder') !== -1) {
-                    bLink.textContent = 'بناء وتصميم المواقع';
-                }
-            }
-
-            // 4. Insights Label Polish in RTL
-            if (href.indexOf('insights') !== -1 && isRTL) {
-                var iLink = caption.querySelector('.icon-title');
-                if (iLink && iLink.textContent.indexOf('Insights') !== -1) {
-                    iLink.textContent = 'تحليلات الأعمال (BI)';
+            // 2. Concise Clean Titles to Eliminate Any Truncation
+            var tLink = caption.querySelector('.icon-title');
+            if (tLink) {
+                var curText = tLink.textContent.trim();
+                var cleanMap = {
+                    'إدارة الأعمال (ERP)': 'إدارة الأعمال',
+                    'الموارد البشرية (HR)': 'الموارد البشرية',
+                    'إدارة علاقات العملاء (CRM)': 'علاقات العملاء',
+                    'إدارة علاقات العملاء': 'علاقات العملاء',
+                    'خدمة العملاء والدعم': 'خدمة العملاء',
+                    'قاعدة المعرفة والتوثيق': 'قاعدة المعرفة',
+                    'المساعد الذكي (AI)': 'المساعد الذكي',
+                    'النظام الأساسي (Core)': 'النظام الأساسي',
+                    'بناء وتصميم المواقع': 'بناء المواقع',
+                    'تحليلات الأعمال (BI)': 'تحليلات الأعمال'
+                };
+                if (cleanMap[curText]) {
+                    tLink.textContent = cleanMap[curText];
+                    tLink.setAttribute('data-original-title', cleanMap[curText]);
                 }
             }
         });

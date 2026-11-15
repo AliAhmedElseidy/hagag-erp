@@ -149,7 +149,7 @@
             var html = icon.innerHTML || '';
 
             // 1. Helpdesk / Support Missing Label Fix
-            if (href.indexOf('helpdesk') !== -1 || html.indexOf('helpdesk') !== -1) {
+            if (href.indexOf('helpdesk') !== -1 || html.indexOf('helpdesk') !== -1 || html.indexOf('favicon.svg') !== -1 || html.indexOf('helpdesk/desk') !== -1) {
                 var hdLabel = isRTL ? 'خدمة العملاء والدعم' : 'Elsaidy Support';
                 var titleLink = caption.querySelector('.icon-title');
                 if (!titleLink) {
@@ -184,9 +184,16 @@
         var t = setInterval(function () {
             count++;
             fixDesktopLauncher();
-            if (count > 25) clearInterval(t);
-        }, 150);
+            if (count > 50) clearInterval(t);
+        }, 200);
     }
+
+    // Continuous poll when on desktop screen
+    setInterval(function() {
+        if (document.querySelector('.desktop-icon')) {
+            fixDesktopLauncher();
+        }
+    }, 500);
 
     // Debounced safe DOM sweep
     var sweepTimeout = null;

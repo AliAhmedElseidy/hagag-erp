@@ -2850,14 +2850,18 @@ def extend_bootinfo(bootinfo):
     """
     lang = getattr(frappe.local, "lang", "ar") or "ar"
     for app in bootinfo.get("app_data", []):
-        name = app.get("app_name")
+        name = app.get("app_name") or app.get("name")
         if name == "helpdesk":
             app["app_title"] = "خدمة العملاء والدعم" if lang == "ar" else "Elsaidy Support"
+            app["title"] = app["app_title"]
         elif name == "builder":
             app["app_title"] = "بناء المواقع" if lang == "ar" else "Builder"
+            app["title"] = app["app_title"]
         elif name == "insights":
             app["app_title"] = "تحليلات الأعمال" if lang == "ar" else "Insights"
+            app["title"] = app["app_title"]
         elif name == "crm":
             app["app_title"] = "إدارة علاقات العملاء" if lang == "ar" else "Elsaidy CRM"
+            app["title"] = app["app_title"]
 
 

@@ -60,3 +60,29 @@ a[href*="hagagco.com"],
 [dir="rtl"] body {
     font-family: 'Cairo', 'Tajawal', 'Segoe UI', system-ui, -apple-system, sans-serif !important;
 }
+
+/* 6. Desktop App Launcher Layout & Zero Ellipsis / Truncation */
+.desktop-icon {
+    min-width: 95px !important;
+}
+.desktop-icon .icon-caption {
+    width: auto !important;
+    min-width: 95px !important;
+    max-width: 140px !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    line-height: 1.25 !important;
+    text-align: center !important;
+    padding: 0 2px !important;
+}
+.desktop-icon .icon-title {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    display: inline-block !important;
+    word-break: break-word !important;
+    font-size: 13px !important;
+    line-height: 1.25 !important;
+}
+

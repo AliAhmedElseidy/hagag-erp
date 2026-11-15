@@ -239,3 +239,6 @@ app_include_css = ["/assets/hagag_erp/css/hagag_desk_v16.css", "/assets/hagag_er
 app_include_js = ["/assets/hagag_erp/js/hagag_desk_v16.js", "/assets/hagag_erp/js/hagag_chat.js", "/assets/hagag_erp/js/elsaidy_whitelabel.js"]
 web_include_css = ["/assets/hagag_erp/css/hagag_web_v15.css", "/assets/hagag_erp/css/elsaidy_whitelabel.css"]
 web_include_js = ["/assets/hagag_erp/js/hagag_web_v15.js", "/assets/hagag_erp/js/elsaidy_whitelabel.js"]
+
+
+extend_bootinfo = "hagag_erp.setup.extend_bootinfo"

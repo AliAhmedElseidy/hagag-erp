@@ -1065,8 +1065,8 @@ def sync_saudi_print_formats():
         <div class="company-meta">
             <h2>شركة ركن سبل الأفق للمقاولات <span style="font-size: 13px; color: #d97706;">(Elsaidy Contracting)</span></h2>
             <div>
-                <span class="badge-id">سجل تجاري (CR): 1010000000</span>
-                <span class="badge-id">الرقم الضريبي (VAT ID): 300000000000003</span>
+                <span class="badge-id">سجل تجاري (CR): {{ frappe.db.get_value("Company", doc.company, "registration_details") or "-" }}</span>
+                <span class="badge-id">الرقم الضريبي (VAT ID): {{ frappe.db.get_value("Company", doc.company, "tax_id") or doc.company_tax_id or "-" }}</span>
             </div>
             <div style="font-size: 11px; color: #64748b; margin-top: 4px;">المملكة العربية السعودية - الرياض | هاتف: +966569589664</div>
         </div>
@@ -1145,7 +1145,7 @@ def sync_saudi_print_formats():
     </div>
 
     <div style="margin-top: 15px; padding: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 11px;">
-        <strong>الحساب البنكي المعتمد:</strong> البنك الأهلي السعودي (SNB) | الآيبان: SA0000000000000000000000 | باسم: شركة ركن سبل الأفق للمقاولات
+        <strong>الحساب البنكي المعتمد:</strong> {{ frappe.db.get_value("Company", doc.company, "default_bank_account") or 'البنك الأهلي السعودي (SNB)' }} | باسم: {{ doc.company }}
     </div>
 
     <div class="signatures-grid">
@@ -1278,7 +1278,7 @@ def sync_saudi_print_formats():
         <div>
             <h2 style="margin: 0; color: #1e3a8a; font-weight: 800; font-size: 22px;">شركة ركن سبل الأفق للمقاولات</h2>
             <div style="color: #d97706; font-weight: 700; font-size: 13px;">قطاع المشروعات والتنفيذ الإنشائي | Elsaidy Contracting</div>
-            <div style="font-size: 11px; color: #64748b; margin-top: 3px;">سجل تجاري: 1010000000 | الرقم الضريبي: 300000000000003</div>
+            <div style="font-size: 11px; color: #64748b; margin-top: 3px;">سجل تجاري: {{ frappe.db.get_value("Company", doc.company, "registration_details") or "-" }} | الرقم الضريبي: {{ frappe.db.get_value("Company", doc.company, "tax_id") or doc.company_tax_id or "-" }}</div>
         </div>
         <div style="text-align: left;">
             <div style="font-size: 14px; font-weight: 800; color: #1e3a8a;">رقم المستخلص: {{ doc.custom_ipc_number or doc.name }}</div>
@@ -2820,6 +2820,13 @@ def sync_elsaidy_customizations():
     except Exception as e:
         print(f" -> Warning in sync_raven_patch: {e}")
 
+    # 20. Synchronize System Finalization (ZATCA, Dashboards, Wiki, Manager Portal)
+    try:
+        from hagag_erp import finalization
+        finalization.run_finalization_sync()
+    except Exception as e:
+        print(f" -> Error in run_finalization_sync: {e}")
+
     print("\n[Elsaidy ERP] All customizations synchronized successfully!\n")
     return True
 
@@ -2894,9 +2901,13 @@ def extend_bootinfo(bootinfo):
     """
     Standard Frappe hook to polish app titles and desktop metadata
     prior to sending boot payload to the client.
-    Ensures Helpdesk has its proper title and all app titles fit without truncation.
+    Ensures Helpdesk has its proper title, all app titles fit without truncation,
+    and restricts Builder to System Managers.
     """
     lang = getattr(frappe.local, "lang", "ar") or "ar"
+    user = getattr(frappe.session, "user", None)
+    user_roles = set(frappe.get_roles(user)) if user else set()
+
     for app in bootinfo.get("app_data", []):
         name = app.get("app_name") or app.get("name")
         if name == "helpdesk":
@@ -2926,5 +2937,12 @@ def extend_bootinfo(bootinfo):
         elif name == "frappe":
             app["app_title"] = "النظام الأساسي" if lang == "ar" else "Core"
             app["title"] = app["app_title"]
+
+    # Restrict Builder from non-System Managers
+    if "System Manager" not in user_roles and "app_data" in bootinfo:
+        bootinfo["app_data"] = [
+            app for app in bootinfo["app_data"]
+            if (app.get("app_name") or app.get("name")) != "builder"
+        ]
 
 

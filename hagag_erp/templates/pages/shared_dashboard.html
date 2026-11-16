@@ -1,0 +1,316 @@
+{% extends "templates/web.html" %}
+
+{% block header %}{% endblock %}
+{% block footer %}{% endblock %}
+
+{% block page_content %}
+<div dir="rtl" class="executive-portal-container">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
+        body {
+            background-color: #f8fafc;
+            font-family: 'Cairo', system-ui, -apple-system, sans-serif;
+            color: #0f172a;
+            margin: 0;
+            padding: 0;
+        }
+        .executive-portal-container {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 24px 20px;
+        }
+        .header-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
+            color: #ffffff;
+            padding: 20px 28px;
+            border-radius: 12px;
+            box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
+            margin-bottom: 24px;
+        }
+        .header-brand h1 {
+            margin: 0 0 6px 0;
+            font-size: 24px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+        }
+        .header-brand p {
+            margin: 0;
+            font-size: 13px;
+            color: #cbd5e1;
+        }
+        .header-tag {
+            background: rgba(217, 119, 6, 0.2);
+            border: 1px solid #d97706;
+            color: #fef3c7;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .error-card {
+            background: #ffffff;
+            border: 1px solid #fecaca;
+            border-right: 6px solid #dc2626;
+            padding: 24px;
+            border-radius: 10px;
+            color: #991b1b;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+            text-align: center;
+            margin: 40px auto;
+            max-width: 600px;
+        }
+        .error-card h2 {
+            margin-top: 0;
+            font-size: 20px;
+        }
+        .grid-kpis {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 16px;
+            margin-bottom: 28px;
+        }
+        .kpi-card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 18px 20px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+        .kpi-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.06);
+        }
+        .kpi-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #64748b;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .kpi-value {
+            font-size: 24px;
+            font-weight: 800;
+            color: #0f172a;
+            letter-spacing: -0.5px;
+        }
+        .kpi-unit {
+            font-size: 13px;
+            font-weight: 600;
+            color: #94a3b8;
+            margin-right: 4px;
+        }
+        .kpi-sub {
+            margin-top: 6px;
+            font-size: 11px;
+            color: #64748b;
+        }
+        .highlight-emerald { border-right: 4px solid #10b981; }
+        .highlight-blue { border-right: 4px solid #2563eb; }
+        .highlight-amber { border-right: 4px solid #d97706; }
+        .highlight-purple { border-right: 4px solid #7c3aed; }
+        .highlight-rose { border-right: 4px solid #e11d48; }
+        .highlight-cyan { border-right: 4px solid #0891b2; }
+
+        .section-card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 22px 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+        }
+        .section-card h3 {
+            margin: 0 0 16px 0;
+            font-size: 17px;
+            font-weight: 800;
+            color: #1e3a8a;
+            border-bottom: 2px solid #f1f5f9;
+            padding-bottom: 10px;
+        }
+        .custom-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .custom-table th {
+            background: #f8fafc;
+            color: #475569;
+            font-weight: 700;
+            text-align: right;
+            padding: 12px 14px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        .custom-table td {
+            padding: 12px 14px;
+            border-bottom: 1px solid #f1f5f9;
+            color: #1e293b;
+        }
+        .custom-table tr:hover td {
+            background: #f8fafc;
+        }
+        .badge-status {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .badge-active { background: #dcfce7; color: #15803d; }
+        .badge-pending { background: #fef3c7; color: #b45309; }
+
+        .progress-bar-bg {
+            background: #e2e8f0;
+            border-radius: 6px;
+            height: 8px;
+            width: 100%;
+            overflow: hidden;
+            display: inline-block;
+        }
+        .progress-bar-fill {
+            background: linear-gradient(90deg, #10b981, #059669);
+            height: 100%;
+        }
+        .portal-footer {
+            text-align: center;
+            margin-top: 32px;
+            padding-top: 16px;
+            border-top: 1px solid #e2e8f0;
+            font-size: 12px;
+            color: #94a3b8;
+        }
+    </style>
+
+    {% if error %}
+    <div class="error-card">
+        <h2>عذراً، لا يمكن فتح لوحة المؤشرات</h2>
+        <p>{{ error }}</p>
+        <p style="font-size: 12px; color: #64748b;">يرجى التواصل مع إدارة النظام لطلب رابط مشاهدة جديد ومحدث.</p>
+    </div>
+    {% else %}
+    <div class="header-bar">
+        <div class="header-brand">
+            <h1>شركة ركن سبل الأفق للمقاولات</h1>
+            <p>{{ dashboard_title or 'بوابة المتابعة التنفيذية الشاملة' }} | ELSAIDY ERP</p>
+        </div>
+        <div>
+            <span class="header-tag">مشاهدة آمنة ومحمية</span>
+        </div>
+    </div>
+
+    <!-- Top KPI Grid -->
+    <div class="grid-kpis">
+        <div class="kpi-card highlight-emerald">
+            <div class="kpi-title">
+                <span>إجمالي السيولة المتاحة</span>
+                <span>🏦</span>
+            </div>
+            <div class="kpi-value">{{ "{:,.2f}".format(metrics.total_liquidity) }} <span class="kpi-unit">SAR</span></div>
+            <div class="kpi-sub">
+                بنك: {{ "{:,.2f}".format(metrics.bank_balance) }} | صندوق: {{ "{:,.2f}".format(metrics.cash_balance) }}
+            </div>
+        </div>
+
+        <div class="kpi-card highlight-blue">
+            <div class="kpi-title">
+                <span>إجمالي المستخلصات المعتمدة</span>
+                <span>📄</span>
+            </div>
+            <div class="kpi-value">{{ "{:,.2f}".format(metrics.total_invoiced) }} <span class="kpi-unit">SAR</span></div>
+            <div class="kpi-sub">
+                المحصل: {{ "{:,.2f}".format(metrics.collected_amount) }} SAR
+            </div>
+        </div>
+
+        <div class="kpi-card highlight-amber">
+            <div class="kpi-title">
+                <span>الذمم المستحقة التحصيل</span>
+                <span>⏳</span>
+            </div>
+            <div class="kpi-value">{{ "{:,.2f}".format(metrics.total_outstanding) }} <span class="kpi-unit">SAR</span></div>
+            <div class="kpi-sub">فواتير مبيعات قائمة تحت التحصيل</div>
+        </div>
+
+        <div class="kpi-card highlight-rose">
+            <div class="kpi-title">
+                <span>المصروفات التشغيلية</span>
+                <span>📉</span>
+            </div>
+            <div class="kpi-value">{{ "{:,.2f}".format(metrics.operating_expenses) }} <span class="kpi-unit">SAR</span></div>
+            <div class="kpi-sub">حسابات المجموعة 5 (بدون ضريبة 1510)</div>
+        </div>
+
+        <div class="kpi-card highlight-purple">
+            <div class="kpi-title">
+                <span>العهد النقدية تحت التسوية</span>
+                <span>💼</span>
+            </div>
+            <div class="kpi-value">{{ "{:,.2f}".format(metrics.custody_balance) }} <span class="kpi-unit">SAR</span></div>
+            <div class="kpi-sub">حساب 1120 لمهندسي ومشرفي المواقع</div>
+        </div>
+
+        <div class="kpi-card highlight-cyan">
+            <div class="kpi-title">
+                <span>صافي ضريبة القيمة المضافة 15%</span>
+                <span>🏛️</span>
+            </div>
+            <div class="kpi-value">{{ "{:,.2f}".format(metrics.net_vat) }} <span class="kpi-unit">SAR</span></div>
+            <div class="kpi-sub">
+                مخرجات (2330): {{ "{:,.2f}".format(metrics.output_vat) }} | مدخلات (1510): {{ "{:,.2f}".format(metrics.input_vat) }}
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Projects Section -->
+    <div class="section-card">
+        <h3>موقف المشاريع الإنشائية والتنفيذ الميداني</h3>
+        {% if projects and projects|length > 0 %}
+        <table class="custom-table">
+            <thead>
+                <tr>
+                    <th style="width: 30%;">اسم المشروع</th>
+                    <th style="width: 15%;">الحالة</th>
+                    <th style="width: 25%;">نسبة الإنجاز الفعلي</th>
+                    <th style="width: 15%;">التكلفة التقديرية</th>
+                    <th style="width: 15%;">المفوتر الفعلي</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in projects %}
+                <tr>
+                    <td><strong>{{ p.project_name or p.name }}</strong></td>
+                    <td>
+                        <span class="badge-status {% if p.status == 'Open' %}badge-active{% else %}badge-pending{% endif %}">
+                            {{ p.status }}
+                        </span>
+                    </td>
+                    <td>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <div class="progress-bar-bg">
+                                <div class="progress-bar-fill" style="width: {{ p.percent_complete or 0 }}%;"></div>
+                            </div>
+                            <span style="font-weight: 700; font-size: 11px;">{{ "{:.1f}".format(p.percent_complete or 0) }}%</span>
+                        </div>
+                    </td>
+                    <td>{{ "{:,.2f}".format(p.estimated_costing or 0) }} SAR</td>
+                    <td style="font-weight: 700; color: #1e3a8a;">{{ "{:,.2f}".format(p.total_billed_amount or 0) }} SAR</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color: #64748b; font-size: 13px;">لا توجد مشاريع نشطة مسجلة حالياً.</p>
+        {% endif %}
+    </div>
+
+    <div class="portal-footer">
+        <p>نظام ELSAIDY ERP — شركة ركن سبل الأفق للمقاولات المحدودة | رابط خاص ينتهي في: {{ expires_at }}</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

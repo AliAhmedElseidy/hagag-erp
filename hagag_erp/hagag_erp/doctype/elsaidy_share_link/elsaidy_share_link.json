@@ -1,0 +1,143 @@
+{
+ "actions": [],
+ "autoname": "format:SL-{#####}",
+ "creation": "2026-11-17 01:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "title",
+  "dashboard",
+  "token",
+  "expires_at",
+  "is_revoked",
+  "column_break_share",
+  "share_url",
+  "views_count",
+  "last_accessed_at",
+  "last_accessed_ip",
+  "section_break_log",
+  "description",
+  "access_log"
+ ],
+ "fields": [
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "عنوان الرابط / الوصف",
+   "reqd": 1
+  },
+  {
+   "fieldname": "dashboard",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "لوحة المؤشرات",
+   "options": "Insights Dashboard v3",
+   "reqd": 1
+  },
+  {
+   "fieldname": "token",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "رمز الوصول (Token)",
+   "read_only": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "expires_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "تاريخ ووقت الانتهاء",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_revoked",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "ملغى فوراً (Revoked)"
+  },
+  {
+   "fieldname": "column_break_share",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "share_url",
+   "fieldtype": "Data",
+   "label": "رابط المشاهدة الكامل",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "views_count",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "عدد المشاهدات",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_accessed_at",
+   "fieldtype": "Datetime",
+   "label": "آخر وصول",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_accessed_ip",
+   "fieldtype": "Data",
+   "label": "آخر عنوان IP",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_log",
+   "fieldtype": "Section Break",
+   "label": "سجل المراجعة والتدقيق"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "ملاحظات إضافية"
+  },
+  {
+   "fieldname": "access_log",
+   "fieldtype": "Long Text",
+   "label": "سجل فتح الرابط (Audit Trail)",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-11-17 01:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Hagag ERP",
+ "name": "Elsaidy Share Link",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 0,
+   "delete": 0,
+   "email": 0,
+   "export": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Executive Director (Read Only)",
+   "share": 0,
+   "write": 0
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

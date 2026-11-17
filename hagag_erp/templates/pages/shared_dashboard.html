@@ -203,8 +203,9 @@
         </div>
     </div>
 
-    <!-- Top KPI Grid -->
+    <!-- Dynamic KPI Grid -->
     <div class="grid-kpis">
+        {% if metrics.total_liquidity is defined %}
         <div class="kpi-card highlight-emerald">
             <div class="kpi-title">
                 <span>إجمالي السيولة المتاحة</span>
@@ -212,10 +213,12 @@
             </div>
             <div class="kpi-value">{{ "{:,.2f}".format(metrics.total_liquidity) }} <span class="kpi-unit">SAR</span></div>
             <div class="kpi-sub">
-                بنك: {{ "{:,.2f}".format(metrics.bank_balance) }} | صندوق: {{ "{:,.2f}".format(metrics.cash_balance) }}
+                بنك: {{ "{:,.2f}".format(metrics.bank_balance or 0) }} | صندوق: {{ "{:,.2f}".format(metrics.cash_balance or 0) }}
             </div>
         </div>
+        {% endif %}
 
+        {% if metrics.total_invoiced is defined %}
         <div class="kpi-card highlight-blue">
             <div class="kpi-title">
                 <span>إجمالي المستخلصات المعتمدة</span>
@@ -223,10 +226,12 @@
             </div>
             <div class="kpi-value">{{ "{:,.2f}".format(metrics.total_invoiced) }} <span class="kpi-unit">SAR</span></div>
             <div class="kpi-sub">
-                المحصل: {{ "{:,.2f}".format(metrics.collected_amount) }} SAR
+                المحصل: {{ "{:,.2f}".format(metrics.collected_amount or 0) }} SAR
             </div>
         </div>
+        {% endif %}
 
+        {% if metrics.total_outstanding is defined %}
         <div class="kpi-card highlight-amber">
             <div class="kpi-title">
                 <span>الذمم المستحقة التحصيل</span>
@@ -235,7 +240,9 @@
             <div class="kpi-value">{{ "{:,.2f}".format(metrics.total_outstanding) }} <span class="kpi-unit">SAR</span></div>
             <div class="kpi-sub">فواتير مبيعات قائمة تحت التحصيل</div>
         </div>
+        {% endif %}
 
+        {% if metrics.operating_expenses is defined %}
         <div class="kpi-card highlight-rose">
             <div class="kpi-title">
                 <span>المصروفات التشغيلية</span>
@@ -244,7 +251,9 @@
             <div class="kpi-value">{{ "{:,.2f}".format(metrics.operating_expenses) }} <span class="kpi-unit">SAR</span></div>
             <div class="kpi-sub">حسابات المجموعة 5 (بدون ضريبة 1510)</div>
         </div>
+        {% endif %}
 
+        {% if metrics.custody_balance is defined %}
         <div class="kpi-card highlight-purple">
             <div class="kpi-title">
                 <span>العهد النقدية تحت التسوية</span>
@@ -253,7 +262,9 @@
             <div class="kpi-value">{{ "{:,.2f}".format(metrics.custody_balance) }} <span class="kpi-unit">SAR</span></div>
             <div class="kpi-sub">حساب 1120 لمهندسي ومشرفي المواقع</div>
         </div>
+        {% endif %}
 
+        {% if metrics.net_vat is defined %}
         <div class="kpi-card highlight-cyan">
             <div class="kpi-title">
                 <span>صافي ضريبة القيمة المضافة 15%</span>
@@ -261,15 +272,51 @@
             </div>
             <div class="kpi-value">{{ "{:,.2f}".format(metrics.net_vat) }} <span class="kpi-unit">SAR</span></div>
             <div class="kpi-sub">
-                مخرجات (2330): {{ "{:,.2f}".format(metrics.output_vat) }} | مدخلات (1510): {{ "{:,.2f}".format(metrics.input_vat) }}
+                مخرجات (2330): {{ "{:,.2f}".format(metrics.output_vat or 0) }} | مدخلات (1510): {{ "{:,.2f}".format(metrics.input_vat or 0) }}
             </div>
         </div>
+        {% endif %}
+
+        {% if metrics.total_estimated_costing is defined %}
+        <div class="kpi-card highlight-blue">
+            <div class="kpi-title">
+                <span>إجمالي موازنة المشاريع</span>
+                <span>🏗️</span>
+            </div>
+            <div class="kpi-value">{{ "{:,.2f}".format(metrics.total_estimated_costing) }} <span class="kpi-unit">SAR</span></div>
+            <div class="kpi-sub">
+                المفوتر: {{ "{:,.2f}".format(metrics.total_billed_amount or 0) }} SAR | الإنجاز: {{ metrics.average_completion_rate }}%
+            </div>
+        </div>
+        {% endif %}
+
+        {% if metrics.total_po_amount is defined %}
+        <div class="kpi-card highlight-amber">
+            <div class="kpi-title">
+                <span>أوامر الشراء المعتمدة</span>
+                <span>📦</span>
+            </div>
+            <div class="kpi-value">{{ "{:,.2f}".format(metrics.total_po_amount) }} <span class="kpi-unit">SAR</span></div>
+            <div class="kpi-sub">عدد الأوامر: {{ metrics.purchase_orders_count }} | مستحقات الموردين: {{ "{:,.2f}".format(metrics.total_supplier_payable or 0) }} SAR</div>
+        </div>
+        {% endif %}
+
+        {% if metrics.active_employees_count is defined %}
+        <div class="kpi-card highlight-purple">
+            <div class="kpi-title">
+                <span>الكوادر البشرية النشطة</span>
+                <span>👷</span>
+            </div>
+            <div class="kpi-value">{{ metrics.active_employees_count }} <span class="kpi-unit">موظف</span></div>
+            <div class="kpi-sub">إجمالي العهد لدى الكادر: {{ "{:,.2f}".format(metrics.total_custody_held or 0) }} SAR</div>
+        </div>
+        {% endif %}
     </div>
 
     <!-- Active Projects Section -->
+    {% if projects and projects|length > 0 %}
     <div class="section-card">
         <h3>موقف المشاريع الإنشائية والتنفيذ الميداني</h3>
-        {% if projects and projects|length > 0 %}
         <table class="custom-table">
             <thead>
                 <tr>
@@ -303,10 +350,31 @@
                 {% endfor %}
             </tbody>
         </table>
-        {% else %}
-        <p style="color: #64748b; font-size: 13px;">لا توجد مشاريع نشطة مسجلة حالياً.</p>
-        {% endif %}
     </div>
+    {% endif %}
+
+    <!-- Departments Section if available -->
+    {% if departments and departments|length > 0 %}
+    <div class="section-card">
+        <h3>توزيع الكوادر حسب الأقسام الإدارية والميدانية</h3>
+        <table class="custom-table">
+            <thead>
+                <tr>
+                    <th>القسم</th>
+                    <th>عدد الموظفين</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in departments %}
+                <tr>
+                    <td><strong>{{ d.department }}</strong></td>
+                    <td>{{ d.count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
 
     <div class="portal-footer">
         <p>نظام ELSAIDY ERP — شركة ركن سبل الأفق للمقاولات المحدودة | رابط خاص ينتهي في: {{ expires_at }}</p>

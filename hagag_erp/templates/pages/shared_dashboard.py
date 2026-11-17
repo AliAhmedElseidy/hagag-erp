@@ -20,6 +20,7 @@ def get_context(context):
         context.dashboard_title = data.get("title")
         context.metrics = data.get("metrics")
         context.projects = data.get("projects")
+        context.departments = data.get("departments")
         context.expires_at = data.get("expires_at")
         context.views_count = data.get("views_count")
     except Exception as e:

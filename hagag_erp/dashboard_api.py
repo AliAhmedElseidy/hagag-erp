@@ -156,13 +156,31 @@ def get_input_vat_balance(filters=None):
 # Manager Portal (Executive Read-Only & Secure Share Link API)
 # -------------------------------------------------------------
 
+def _check_manager_permission():
+    """
+    Strict security check: only authorized managers (System Manager, CEO, Director)
+    can generate, list, or revoke executive share links.
+    Auditors, Accounts Users, Guests, and Read-Only roles are strictly forbidden.
+    """
+    if frappe.session.user == "Administrator":
+        return
+    manager_roles = {"System Manager", "CEO", "Director"}
+    user_roles = set(frappe.get_roles(frappe.session.user))
+    if manager_roles.intersection(user_roles):
+        return
+    frappe.throw(
+        _("غير مصرح لك بإدارة أو إنشاء روابط المشاركة. الصلاحية مقتصرة حصرياً على المديرين المخولين (System Manager, CEO, Director)."),
+        frappe.PermissionError,
+    )
+
+
 @frappe.whitelist()
 def create_executive_share_link(dashboard, expires_in_days=7, description=None):
     """
     Creates a secure, time-expiring link for executive dashboard viewing without login.
     Only permitted users (System Manager, CEO, Director) can generate links.
     """
-    _check_financial_permission()
+    _check_manager_permission()
 
     if not frappe.db.exists("Insights Dashboard v3", dashboard):
         frappe.throw(_("لوحة المؤشرات المحددة غير موجودة: {0}").format(dashboard))
@@ -190,9 +208,9 @@ def create_executive_share_link(dashboard, expires_in_days=7, description=None):
 @frappe.whitelist()
 def revoke_executive_share_link(token):
     """
-    Immediately revokes an active share link.
+    Immediately revokes an active share link. Restricts to authorized managers.
     """
-    _check_financial_permission()
+    _check_manager_permission()
     name = frappe.db.get_value("Elsaidy Share Link", {"token": token}, "name")
     if not name:
         frappe.throw(_("رابط المشاركة غير موجود"))
@@ -207,9 +225,9 @@ def revoke_executive_share_link(token):
 @frappe.whitelist()
 def list_active_share_links():
     """
-    Lists active, unrevoked share links with usage statistics.
+    Lists active, unrevoked share links with usage statistics for authorized managers only.
     """
-    _check_financial_permission()
+    _check_manager_permission()
     links = frappe.get_all(
         "Elsaidy Share Link",
         filters={"is_revoked": 0},
@@ -235,7 +253,8 @@ def get_shared_dashboard_data(token):
     """
     Secure endpoint for Guest access via expiring share token.
     Validates token, checks expiry/revocation, records access log,
-    and returns ONLY pre-aggregated dashboard KPI metrics without exposing raw database tables.
+    and returns ONLY pre-aggregated dashboard KPI metrics for the SPECIFIC authorized dashboard,
+    strictly protecting employee PII, raw tables, and unauthorized modules.
     """
     if not token or not isinstance(token, str) or len(token) < 16:
         frappe.throw(_("رابط غير صالح أو مفقود"), frappe.PermissionError)
@@ -278,79 +297,240 @@ def get_shared_dashboard_data(token):
     )
     frappe.db.commit()
 
-    # Pre-aggregate safe contracting executive metrics
     company = "ركن سبل الافق"
+    dashboard_id = link_data.dashboard
+    dashboard_title = frappe.db.get_value("Insights Dashboard v3", dashboard_id, "title") or link_data.title
 
-    # Liquidity
-    liquidity_res = frappe.db.sql(
-        """
-        SELECT
-            COALESCE(SUM(CASE WHEN account LIKE '1201%%' THEN debit - credit ELSE 0 END), 0) as bank_balance,
-            COALESCE(SUM(CASE WHEN account LIKE '1110%%' THEN debit - credit ELSE 0 END), 0) as cash_balance,
-            COALESCE(SUM(CASE WHEN account LIKE '1120%%' THEN debit - credit ELSE 0 END), 0) as custody_balance,
-            COALESCE(SUM(CASE WHEN account LIKE '5%%' THEN debit - credit ELSE 0 END), 0) as operating_expenses,
-            COALESCE(SUM(CASE WHEN account LIKE '1510%%' THEN debit - credit ELSE 0 END), 0) as input_vat,
-            COALESCE(SUM(CASE WHEN account LIKE '2330%%' THEN credit - debit ELSE 0 END), 0) as output_vat
-        FROM `tabGL Entry`
-        WHERE company = %s AND is_cancelled = 0
-        """,
-        (company,),
-        as_dict=True,
-    )
-    liq = liquidity_res[0] if liquidity_res else {}
-
-    # Contracts & Invoicing
-    invoice_res = frappe.db.sql(
-        """
-        SELECT
-            COALESCE(COUNT(name), 0) as total_invoices,
-            COALESCE(SUM(base_grand_total), 0) as total_invoiced,
-            COALESCE(SUM(outstanding_amount), 0) as total_outstanding
-        FROM `tabSales Invoice`
-        WHERE company = %s AND docstatus = 1
-        """,
-        (company,),
-        as_dict=True,
-    )
-    inv = invoice_res[0] if invoice_res else {}
-
-    # Active Projects
-    projects_res = frappe.db.sql(
-        """
-        SELECT
-            name, project_name, status, percent_complete, estimated_costing, total_billed_amount
-        FROM `tabProject`
-        WHERE company = %s AND status != 'Completed'
-        ORDER BY creation DESC
-        LIMIT 10
-        """,
-        (company,),
-        as_dict=True,
-    )
-
-    # Active Employees count
-    emp_count = frappe.db.count("Employee", {"status": "Active"})
-
-    dashboard_title = frappe.db.get_value("Insights Dashboard v3", link_data.dashboard, "title") or link_data.title
-
-    return {
+    payload = {
         "title": dashboard_title,
+        "dashboard_id": dashboard_id,
         "expires_at": str(link_data.expires_at),
         "views_count": new_count,
-        "metrics": {
-            "bank_balance": float(liq.get("bank_balance", 0)),
-            "cash_balance": float(liq.get("cash_balance", 0)),
-            "total_liquidity": float(liq.get("bank_balance", 0)) + float(liq.get("cash_balance", 0)),
-            "custody_balance": float(liq.get("custody_balance", 0)),
-            "operating_expenses": float(liq.get("operating_expenses", 0)),
-            "input_vat": float(liq.get("input_vat", 0)),
-            "output_vat": float(liq.get("output_vat", 0)),
-            "net_vat": float(liq.get("output_vat", 0)) - float(liq.get("input_vat", 0)),
+        "metrics": {},
+    }
+
+    # Route data payload strictly according to the linked dashboard:
+    if dashboard_id == "ta38bufs82":
+        # 1. لوحة المشاريع والمقاولات: بيانات المشاريع ونسب الإنجاز والتكاليف فقط
+        projects_res = frappe.db.sql(
+            """
+            SELECT
+                name, project_name, status, percent_complete, estimated_costing, total_billed_amount
+            FROM `tabProject`
+            WHERE company = %s
+            ORDER BY creation DESC
+            LIMIT 20
+            """,
+            (company,),
+            as_dict=True,
+        )
+        total_estimated = sum(float(p.get("estimated_costing") or 0) for p in projects_res)
+        total_billed = sum(float(p.get("total_billed_amount") or 0) for p in projects_res)
+        avg_completion = sum(float(p.get("percent_complete") or 0) for p in projects_res) / len(projects_res) if projects_res else 0.0
+
+        payload["metrics"] = {
+            "active_projects_count": len([p for p in projects_res if p.get("status") != "Completed"]),
+            "total_estimated_costing": total_estimated,
+            "total_billed_amount": total_billed,
+            "average_completion_rate": round(avg_completion, 1),
+        }
+        payload["projects"] = projects_res
+
+    elif dashboard_id == "ta3f45js58":
+        # 2. لوحة الإدارة المالية والسيولة: الحسابات، البنوك، المصروفات، والضريبة
+        fin_res = frappe.db.sql(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN account LIKE '1201%%' THEN debit - credit ELSE 0 END), 0) as bank_balance,
+                COALESCE(SUM(CASE WHEN account LIKE '1110%%' THEN debit - credit ELSE 0 END), 0) as cash_balance,
+                COALESCE(SUM(CASE WHEN account LIKE '1120%%' THEN debit - credit ELSE 0 END), 0) as custody_balance,
+                COALESCE(SUM(CASE WHEN account LIKE '5%%' THEN debit - credit ELSE 0 END), 0) as operating_expenses,
+                COALESCE(SUM(CASE WHEN account LIKE '1510%%' THEN debit - credit ELSE 0 END), 0) as input_vat,
+                COALESCE(SUM(CASE WHEN account LIKE '2330%%' THEN credit - debit ELSE 0 END), 0) as output_vat
+            FROM `tabGL Entry`
+            WHERE company = %s AND is_cancelled = 0
+            """,
+            (company,),
+            as_dict=True,
+        )
+        f = fin_res[0] if fin_res else {}
+        bank = float(f.get("bank_balance", 0))
+        cash = float(f.get("cash_balance", 0))
+        payload["metrics"] = {
+            "bank_balance": bank,
+            "cash_balance": cash,
+            "total_liquidity": bank + cash,
+            "custody_balance": float(f.get("custody_balance", 0)),
+            "operating_expenses": float(f.get("operating_expenses", 0)),
+            "input_vat": float(f.get("input_vat", 0)),
+            "output_vat": float(f.get("output_vat", 0)),
+            "net_vat": float(f.get("output_vat", 0)) - float(f.get("input_vat", 0)),
+        }
+
+    elif dashboard_id == "ta4grqim1d":
+        # 3. لوحة المشتريات والموردين: أوامر الشراء، فواتير المشتريات، وأرصدة الموردين
+        po_res = frappe.db.sql(
+            """
+            SELECT
+                COALESCE(COUNT(name), 0) as po_count,
+                COALESCE(SUM(base_grand_total), 0) as total_po_amount
+            FROM `tabPurchase Order`
+            WHERE company = %s AND docstatus = 1
+            """,
+            (company,),
+            as_dict=True,
+        )
+        pi_res = frappe.db.sql(
+            """
+            SELECT
+                COALESCE(COUNT(name), 0) as pi_count,
+                COALESCE(SUM(base_grand_total), 0) as total_pi_amount,
+                COALESCE(SUM(outstanding_amount), 0) as total_payable
+            FROM `tabPurchase Invoice`
+            WHERE company = %s AND docstatus = 1
+            """,
+            (company,),
+            as_dict=True,
+        )
+        po = po_res[0] if po_res else {}
+        pi = pi_res[0] if pi_res else {}
+        payload["metrics"] = {
+            "purchase_orders_count": int(po.get("po_count", 0)),
+            "total_po_amount": float(po.get("total_po_amount", 0)),
+            "purchase_invoices_count": int(pi.get("pi_count", 0)),
+            "total_pi_amount": float(pi.get("total_pi_amount", 0)),
+            "total_supplier_payable": float(pi.get("total_payable", 0)),
+        }
+
+    elif dashboard_id == "ta40cvqbt0":
+        # 4. لوحة الموارد البشرية والعمالة: إحصائيات الكوادر بدون بيانات شخصية
+        active_emp_count = frappe.db.count("Employee", {"status": "Active"})
+        custody_emp = frappe.db.sql(
+            """
+            SELECT COALESCE(SUM(debit - credit), 0) as total_custody
+            FROM `tabGL Entry`
+            WHERE company = %s AND is_cancelled = 0 AND account LIKE '1120%%'
+            """,
+            (company,),
+            as_dict=True,
+        )
+        departments = frappe.db.sql(
+            """
+            SELECT department, COUNT(name) as count
+            FROM `tabEmployee`
+            WHERE status = 'Active' AND department IS NOT NULL
+            GROUP BY department
+            """,
+            as_dict=True,
+        )
+        payload["metrics"] = {
+            "active_employees_count": active_emp_count,
+            "total_custody_held": float(custody_emp[0].get("total_custody", 0)) if custody_emp else 0.0,
+            "departments_count": len(departments),
+        }
+        payload["departments"] = departments
+
+    elif dashboard_id == "fhfdbsjbrl":
+        # 5. لوحة المستخلصات والضريبة ومحجوزات الضمان
+        tax_res = frappe.db.sql(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN account LIKE '1510%%' THEN debit - credit ELSE 0 END), 0) as input_vat,
+                COALESCE(SUM(CASE WHEN account LIKE '2330%%' THEN credit - debit ELSE 0 END), 0) as output_vat
+            FROM `tabGL Entry`
+            WHERE company = %s AND is_cancelled = 0
+            """,
+            (company,),
+            as_dict=True,
+        )
+        t = tax_res[0] if tax_res else {}
+        inv_res = frappe.db.sql(
+            """
+            SELECT
+                COALESCE(COUNT(name), 0) as total_invoices,
+                COALESCE(SUM(base_grand_total), 0) as total_invoiced,
+                COALESCE(SUM(outstanding_amount), 0) as total_outstanding
+            FROM `tabSales Invoice`
+            WHERE company = %s AND docstatus = 1
+            """,
+            (company,),
+            as_dict=True,
+        )
+        inv = inv_res[0] if inv_res else {}
+        total_billed = float(inv.get("total_invoiced", 0))
+        retention = total_billed * 0.10  # 10% statutory retention guarantee
+
+        payload["metrics"] = {
+            "total_invoiced": total_billed,
+            "total_outstanding": float(inv.get("total_outstanding", 0)),
+            "collected_amount": total_billed - float(inv.get("total_outstanding", 0)),
+            "retention_guarantee_10pct": retention,
+            "input_vat_15pct": float(t.get("input_vat", 0)),
+            "output_vat_15pct": float(t.get("output_vat", 0)),
+            "net_zatca_payable": float(t.get("output_vat", 0)) - float(t.get("input_vat", 0)),
+        }
+
+    else:
+        # Default / Executive Dashboard (fhe3hd2vih): مؤشرات القيادة العامة والمشاريع
+        liq_res = frappe.db.sql(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN account LIKE '1201%%' THEN debit - credit ELSE 0 END), 0) as bank_balance,
+                COALESCE(SUM(CASE WHEN account LIKE '1110%%' THEN debit - credit ELSE 0 END), 0) as cash_balance,
+                COALESCE(SUM(CASE WHEN account LIKE '1120%%' THEN debit - credit ELSE 0 END), 0) as custody_balance,
+                COALESCE(SUM(CASE WHEN account LIKE '5%%' THEN debit - credit ELSE 0 END), 0) as operating_expenses,
+                COALESCE(SUM(CASE WHEN account LIKE '1510%%' THEN debit - credit ELSE 0 END), 0) as input_vat
+            FROM `tabGL Entry`
+            WHERE company = %s AND is_cancelled = 0
+            """,
+            (company,),
+            as_dict=True,
+        )
+        l = liq_res[0] if liq_res else {}
+        bank = float(l.get("bank_balance", 0))
+        cash = float(l.get("cash_balance", 0))
+
+        inv_res = frappe.db.sql(
+            """
+            SELECT
+                COALESCE(COUNT(name), 0) as total_invoices,
+                COALESCE(SUM(base_grand_total), 0) as total_invoiced,
+                COALESCE(SUM(outstanding_amount), 0) as total_outstanding
+            FROM `tabSales Invoice`
+            WHERE company = %s AND docstatus = 1
+            """,
+            (company,),
+            as_dict=True,
+        )
+        inv = inv_res[0] if inv_res else {}
+
+        projects_res = frappe.db.sql(
+            """
+            SELECT
+                name, project_name, status, percent_complete, estimated_costing, total_billed_amount
+            FROM `tabProject`
+            WHERE company = %s AND status != 'Completed'
+            ORDER BY creation DESC
+            LIMIT 10
+            """,
+            (company,),
+            as_dict=True,
+        )
+        emp_count = frappe.db.count("Employee", {"status": "Active"})
+
+        payload["metrics"] = {
+            "bank_balance": bank,
+            "cash_balance": cash,
+            "total_liquidity": bank + cash,
+            "custody_balance": float(l.get("custody_balance", 0)),
+            "operating_expenses": float(l.get("operating_expenses", 0)),
+            "net_profit_loss": -float(l.get("operating_expenses", 0)),  # Net Loss = Income(0) - Expense
+            "input_vat": float(l.get("input_vat", 0)),
             "total_invoiced": float(inv.get("total_invoiced", 0)),
             "total_outstanding": float(inv.get("total_outstanding", 0)),
-            "collected_amount": float(inv.get("total_invoiced", 0)) - float(inv.get("total_outstanding", 0)),
             "active_projects_count": len(projects_res),
             "active_employees_count": emp_count,
-        },
-        "projects": projects_res,
-    }
+        }
+        payload["projects"] = projects_res
+
+    return payload

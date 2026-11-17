@@ -8,43 +8,20 @@ from frappe.utils import now_datetime, add_to_date
 
 def sync_company_and_zatca_profile():
     """
-    Configures Company 'ركن سبل الافق' with Saudi VAT and CR registration,
-    and initializes ZATCA Business Settings for Sandbox compliance.
+    Safely configures ZATCA environment and tools without overwriting
+    official Company Tax ID, Commercial Registration, or Address data.
+    Ensures Sandbox mode is retained and no production invoices are issued.
     """
-    print("\n[Finalization] 1. Synchronizing Company Profile & ZATCA Business Settings...")
+    print("\n[Finalization] 1. Auditing Company Profile & ZATCA Configuration...")
     company_name = "ركن سبل الافق"
-    if frappe.db.exists("Company", company_name):
-        frappe.db.set_value(
-            "Company",
-            company_name,
-            {
-                "tax_id": "399999999900003",
-                "registration_details": "1010000000",
-                "default_bank_account": "1201 - البنك الأهلي السعودي (SNB) - Rkn",
-            },
-        )
-        frappe.db.commit()
-        print(" -> Company profile updated with VAT ID (399999999900003) and CR (1010000000).")
+    if not frappe.db.exists("Company", company_name):
+        print(f" -> Company '{company_name}' not found, skipping.")
+        return
 
-    # National Address
-    addr_title = "المقر الرئيسي - ركن سبل الأفق"
-    existing_addr = frappe.db.get_value("Address", {"address_title": addr_title}, "name")
-    if not existing_addr:
-        addr = frappe.new_doc("Address")
-        addr.address_title = addr_title
-        addr.address_type = "Billing"
-        addr.address_line1 = "طريق الملك فهد، حي العليا"
-        addr.city = "الرياض"
-        addr.country = "Saudi Arabia"
-        addr.pincode = "12211"
-        addr.custom_building_number = "7234"
-        addr.append("links", {"link_doctype": "Company", "link_name": company_name})
-        addr.insert(ignore_permissions=True)
-        frappe.db.commit()
-        existing_addr = addr.name
-        print(f" -> Created National Address: {existing_addr}")
+    company_doc = frappe.get_doc("Company", company_name)
+    print(f" -> Preserving existing Company data (VAT ID: {company_doc.tax_id or 'Not Set'}, CR: {company_doc.registration_details or 'Not Set'}). No automatic overwrite.")
 
-    # ZATCA Business Settings
+    # ZATCA Business Settings (Environment & Tools Setup only)
     if frappe.db.exists("DocType", "ZATCA Business Settings"):
         site_name = frappe.local.site
         cli_path = f"/home/frappe/frappe-bench/sites/{site_name}/zatca-tools/zatca-cli-2.10.0/bin/zatca-cli"
@@ -57,39 +34,32 @@ def sync_company_and_zatca_profile():
             bs.company_unit = "الفرع الرئيسي"
             bs.company_unit_serial = "1-RSG|2-ERP|3-PROD001"
             bs.company_category = "المقاولات الإنشائية"
-            bs.company_address = existing_addr
             bs.status = "Active"
             bs.country = "Saudi Arabia"
             bs.country_code = "SA"
-            bs.seller_name = "شركة ركن سبل الأفق للمقاولات"
-            bs.vat_registration_number = "399999999900003"
-            bs.city = "الرياض"
-            bs.building_number = "7234"
-            bs.postal_code = "12211"
-            bs.district = "العليا"
-            bs.street = "طريق الملك فهد"
-            bs.fatoora_server = "Sandbox"
+            bs.seller_name = company_name
+            bs.vat_registration_number = company_doc.tax_id or ""
+            bs.fatoora_server = "Sandbox"  # STRICT: Always Sandbox until explicit onboarding
             bs.type_of_business_transactions = "Let the system decide (both)"
             bs.cli_setup = "Manual"
             bs.zatca_cli_path = cli_path
             bs.java_home = jre_path
             bs.insert(ignore_permissions=True)
             frappe.db.commit()
-            print(f" -> Created ZATCA Business Settings: {bs.name}")
+            print(f" -> Initialized ZATCA Business Settings in Sandbox: {bs.name}")
         else:
+            # Only update CLI and Java runtime paths; DO NOT overwrite tax_id or switch to production
             frappe.db.set_value(
                 "ZATCA Business Settings",
                 bs_name,
                 {
-                    "seller_name": "شركة ركن سبل الأفق للمقاولات",
-                    "vat_registration_number": "399999999900003",
                     "zatca_cli_path": cli_path,
                     "java_home": jre_path,
-                    "status": "Active",
+                    "fatoora_server": "Sandbox",  # STRICT: Safety guard against premature production invoices
                 },
             )
             frappe.db.commit()
-            print(f" -> Updated ZATCA Business Settings: {bs_name}")
+            print(f" -> Maintained ZATCA Business Settings ({bs_name}) in Sandbox mode with verified tool paths.")
 
 
 def sync_print_formats_dynamic():

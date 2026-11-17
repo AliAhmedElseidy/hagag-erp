@@ -2099,7 +2099,7 @@ def sync_insights_v3_dashboards():
             doc.query = query_map[c["query_key"]]
             doc.chart_type = c["chart_type"]
             doc.config = json.dumps(c["config"])
-            doc.is_public = 1
+            doc.is_public = 0
             doc.insert(ignore_permissions=True)
             chart_map[c["key"]] = doc.name
 
@@ -2122,7 +2122,7 @@ def sync_insights_v3_dashboards():
     if existing_d1:
         d1 = frappe.get_doc("Insights Dashboard v3", existing_d1[0])
         d1.workbook = wb_name
-        d1.is_public = 1
+        d1.is_public = 0
         d1.items = json.dumps(d1_items)
         d1.set("linked_charts", [])
         for item in d1_items:
@@ -2132,7 +2132,7 @@ def sync_insights_v3_dashboards():
         d1 = frappe.new_doc("Insights Dashboard v3")
         d1.title = d1_title
         d1.workbook = wb_name
-        d1.is_public = 1
+        d1.is_public = 0
         d1.items = json.dumps(d1_items)
         for item in d1_items:
             d1.append("linked_charts", {"chart": item["chart"]})
@@ -2151,7 +2151,7 @@ def sync_insights_v3_dashboards():
     if existing_d2:
         d2 = frappe.get_doc("Insights Dashboard v3", existing_d2[0])
         d2.workbook = wb_name
-        d2.is_public = 1
+        d2.is_public = 0
         d2.items = json.dumps(d2_items)
         d2.set("linked_charts", [])
         for item in d2_items:
@@ -2161,7 +2161,7 @@ def sync_insights_v3_dashboards():
         d2 = frappe.new_doc("Insights Dashboard v3")
         d2.title = d2_title
         d2.workbook = wb_name
-        d2.is_public = 1
+        d2.is_public = 0
         d2.items = json.dumps(d2_items)
         for item in d2_items:
             d2.append("linked_charts", {"chart": item["chart"]})
@@ -2485,7 +2485,7 @@ def sync_elsaidy_dashboards():
                 if c.get("aggregate_function_based_on"):
                     doc.aggregate_function_based_on = c["aggregate_function_based_on"]
                 doc.filters_json = c["filters_json"]
-                doc.is_public = 1
+                doc.is_public = 0
                 doc.module = "Accounts"
                 doc.insert(ignore_permissions=True)
             except Exception:

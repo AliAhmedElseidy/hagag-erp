@@ -385,7 +385,7 @@ def sync_insights_contracting_dashboards():
         # CEO & Finance KPIs
         {
             "key": "kpi_liquidity",
-            "title": "إجمالي السيولة النقدية والبنكية (SAR)",
+            "title": "صافي مركز السيولة والعهد (بانتظار تسوية رأس المال) (SAR)",
             "query_title": "استعلام السيولة النقدية والبنكية والعهد (SAR)",
             "chart_type": "Number",
             "config": {
@@ -394,7 +394,7 @@ def sync_insights_contracting_dashboards():
                 "shorten_numbers": True,
                 "sparkline": False,
                 "number_columns": [
-                    {"measure_name": "السيولة المتاحة (SAR)", "column_name": "liquidity", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}
+                    {"measure_name": "صافي موقف السيولة والعهد (غير مسوى) (SAR)", "column_name": "liquidity", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}
                 ]
             }
         },

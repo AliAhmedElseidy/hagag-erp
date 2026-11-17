@@ -183,7 +183,25 @@
                 }
             }
 
-            // 2. Concise Clean Titles to Eliminate Any Truncation
+            // 2. Concise Clean Titles to Eliminate Any Truncation & ZATCA Branding
+            if (href.indexOf('zatca') !== -1 || html.indexOf('zatca') !== -1 || html.indexOf('ZATCA') !== -1) {
+                var zatcaImg = icon.querySelector('img');
+                if (zatcaImg) {
+                    zatcaImg.src = '/assets/hagag_erp/images/zatca-icon.svg';
+                    zatcaImg.style.width = '48px';
+                    zatcaImg.style.height = '48px';
+                    zatcaImg.style.objectFit = 'contain';
+                }
+                var zatcaLink = caption.querySelector('.icon-title');
+                var zatcaLabel = isRTL ? 'الفوترة الإلكترونية (ZATCA)' : 'ZATCA';
+                if (!zatcaLink) {
+                    caption.innerHTML = '<a class="icon-title" href="' + (href || '/desk/zatca') + '" data-toggle="tooltip" data-original-title="' + zatcaLabel + '">' + zatcaLabel + '</a>';
+                } else {
+                    zatcaLink.textContent = zatcaLabel;
+                    zatcaLink.setAttribute('data-original-title', zatcaLabel);
+                }
+            }
+
             var tLink = caption.querySelector('.icon-title');
             if (tLink) {
                 var curText = tLink.textContent.trim();
@@ -197,7 +215,8 @@
                     'المساعد الذكي (AI)': 'المساعد الذكي',
                     'النظام الأساسي (Core)': 'النظام الأساسي',
                     'بناء وتصميم المواقع': 'بناء المواقع',
-                    'تحليلات الأعمال (BI)': 'تحليلات الأعمال'
+                    'تحليلات الأعمال (BI)': 'تحليلات الأعمال',
+                    'ZATCA': isRTL ? 'الفوترة الإلكترونية (ZATCA)' : 'ZATCA'
                 };
                 if (cleanMap[curText]) {
                     tLink.textContent = cleanMap[curText];

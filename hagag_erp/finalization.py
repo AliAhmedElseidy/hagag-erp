@@ -48,7 +48,6 @@ def sync_company_and_zatca_profile():
             frappe.db.commit()
             print(f" -> Initialized ZATCA Business Settings in Sandbox: {bs.name}")
         else:
-            # Only update CLI and Java runtime paths; DO NOT overwrite tax_id or switch to production
             frappe.db.set_value(
                 "ZATCA Business Settings",
                 bs_name,
@@ -76,6 +75,9 @@ def sync_print_formats_dynamic():
 def sync_insights_contracting_dashboards():
     """
     Sets up the 6 Arabic Contracting Insights Dashboards connected to live ERPNext data.
+    Uses precise native SQL queries with proper accounting logic (debit - credit,
+    root_type / account filters, cancelled filter, real company scope).
+    Ensures strict privacy (is_public=0) and explicit DocShare for management users.
     """
     print("\n[Finalization] 3. Synchronizing 6 Contracting Dashboards in Frappe Insights v3...")
     wb_name = "1"
@@ -88,79 +90,623 @@ def sync_insights_contracting_dashboards():
         wb.insert(ignore_permissions=True)
     frappe.db.commit()
 
-    # Define queries
+    # Define exact SQL queries
     queries_def = [
-        {"key": "gl", "title": "حركات الأستاذ العام - Elsaidy GL", "table": "tabGL Entry"},
-        {"key": "sales", "title": "فواتير ومستخلصات المبيعات - Sales Invoices", "table": "tabSales Invoice"},
-        {"key": "accounts", "title": "شجرة الحسابات والأرصدة - Accounts", "table": "tabAccount"},
-        {"key": "employees", "title": "بيانات الكوادر البشرية والموظفين - Employees", "table": "tabEmployee"},
-        {"key": "projects", "title": "سجل المشروعات والمواقع - Projects", "table": "tabProject"},
-        {"key": "tasks", "title": "المهام التنفيذية الميدانية - Tasks", "table": "tabTask"},
-        {"key": "po", "title": "أوامر الشراء والتوريد - Purchase Orders", "table": "tabPurchase Order"},
-        {"key": "pi", "title": "فواتير المشتريات ومواد البناء - Purchase Invoices", "table": "tabPurchase Invoice"},
+        {
+            "key": "kpi_liq",
+            "title": "استعلام السيولة النقدية والبنكية والعهد (SAR)",
+            "sql": """
+                SELECT 
+                    COALESCE(SUM(gle.debit - gle.credit), 0) AS liquidity
+                FROM `tabGL Entry` gle
+                JOIN `tabAccount` acc ON gle.account = acc.name
+                WHERE gle.company = 'ركن سبل الافق' AND gle.is_cancelled = 0
+                AND (acc.account_type IN ('Cash', 'Bank') OR acc.account_number IN ('1110', '1201', '1120'))
+            """
+        },
+        {
+            "key": "kpi_contracts",
+            "title": "استعلام إجمالي عقود ومستخلصات المشاريع المعتمدة (SAR)",
+            "sql": """
+                SELECT 
+                    COALESCE(SUM(base_grand_total), 0) AS contracts_total
+                FROM `tabSales Invoice`
+                WHERE company = 'ركن سبل الافق' AND docstatus = 1
+            """
+        },
+        {
+            "key": "kpi_exp",
+            "title": "استعلام إجمالي المصروفات التشغيلية المباشرة (SAR)",
+            "sql": """
+                SELECT 
+                    COALESCE(SUM(gle.debit - gle.credit), 0) AS expenses_total
+                FROM `tabGL Entry` gle
+                JOIN `tabAccount` acc ON gle.account = acc.name
+                WHERE gle.company = 'ركن سبل الافق' AND gle.is_cancelled = 0
+                AND acc.root_type = 'Expense'
+            """
+        },
+        {
+            "key": "kpi_vat",
+            "title": "استعلام موقف ضريبة القيمة المضافة 15% (SAR)",
+            "sql": """
+                SELECT 
+                    COALESCE(SUM(CASE WHEN acc.account_number = '2330' OR acc.name LIKE '%%2330%%' THEN (gle.credit - gle.debit) ELSE 0 END), 0) -
+                    COALESCE(SUM(CASE WHEN acc.account_number = '1510' OR acc.name LIKE '%%1510%%' THEN (gle.debit - gle.credit) ELSE 0 END), 0) AS net_vat
+                FROM `tabGL Entry` gle
+                JOIN `tabAccount` acc ON gle.account = acc.name
+                WHERE gle.company = 'ركن سبل الافق' AND gle.is_cancelled = 0
+            """
+        },
+        {
+            "key": "expenses_donut",
+            "title": "استعلام توزيع المصروفات حسب البند المحاسبي",
+            "sql": """
+                SELECT 
+                    acc.account_name AS account_label,
+                    COALESCE(SUM(gle.debit - gle.credit), 0) AS expense_amount
+                FROM `tabGL Entry` gle
+                JOIN `tabAccount` acc ON gle.account = acc.name
+                WHERE gle.company = 'ركن سبل الافق' AND gle.is_cancelled = 0
+                AND acc.root_type = 'Expense'
+                GROUP BY acc.account_name
+                HAVING expense_amount > 0
+                ORDER BY expense_amount DESC
+                LIMIT 10
+            """
+        },
+        {
+            "key": "projects_financial",
+            "title": "استعلام الأداء المالي للمشاريع (التكاليف مقابل الإيرادات)",
+            "sql": """
+                SELECT 
+                    COALESCE(p.project_name, gle.project) AS project_label,
+                    COALESCE(SUM(CASE WHEN acc.root_type = 'Expense' THEN (gle.debit - gle.credit) ELSE 0 END), 0) AS direct_cost,
+                    COALESCE(SUM(CASE WHEN acc.root_type = 'Income' THEN (gle.credit - gle.debit) ELSE 0 END), 0) AS revenue
+                FROM `tabGL Entry` gle
+                JOIN `tabAccount` acc ON gle.account = acc.name
+                LEFT JOIN `tabProject` p ON gle.project = p.name
+                WHERE gle.company = 'ركن سبل الافق' AND gle.is_cancelled = 0
+                AND gle.project IS NOT NULL AND gle.project != ''
+                GROUP BY gle.project
+                LIMIT 15
+            """
+        },
+        {
+            "key": "cashflow_monthly",
+            "title": "استعلام منحنى التدفقات النقدية الشهرية",
+            "sql": """
+                SELECT 
+                    DATE_FORMAT(gle.posting_date, '%Y-%m-01') AS month_date,
+                    COALESCE(SUM(CASE WHEN gle.debit > 0 THEN gle.debit ELSE 0 END), 0) AS inflows,
+                    COALESCE(SUM(CASE WHEN gle.credit > 0 THEN gle.credit ELSE 0 END), 0) AS outflows
+                FROM `tabGL Entry` gle
+                JOIN `tabAccount` acc ON gle.account = acc.name
+                WHERE gle.company = 'ركن سبل الافق' AND gle.is_cancelled = 0
+                AND (acc.account_type IN ('Cash', 'Bank') OR acc.account_number IN ('1110', '1201', '1120'))
+                GROUP BY month_date
+                ORDER BY month_date ASC
+                LIMIT 12
+            """
+        },
+        {
+            "key": "accounts_summary",
+            "title": "استعلام كشف أرصدة الحسابات الرئيسية والبنوك والعهد",
+            "sql": """
+                SELECT 
+                    acc.account_number,
+                    acc.account_name,
+                    acc.account_type,
+                    COALESCE(SUM(gle.debit - gle.credit), 0) AS current_balance
+                FROM `tabAccount` acc
+                LEFT JOIN `tabGL Entry` gle ON acc.name = gle.account AND gle.company = 'ركن سبل الافق' AND gle.is_cancelled = 0
+                WHERE acc.company = 'ركن سبل الافق' AND acc.is_group = 0
+                GROUP BY acc.name
+                ORDER BY acc.account_number ASC
+                LIMIT 50
+            """
+        },
+        {
+            "key": "bank_custody",
+            "title": "استعلام تفصيل أرصدة البنوك والصناديق والعهد",
+            "sql": """
+                SELECT 
+                    acc.account_name,
+                    COALESCE(SUM(gle.debit - gle.credit), 0) AS balance
+                FROM `tabAccount` acc
+                LEFT JOIN `tabGL Entry` gle ON acc.name = gle.account AND gle.company = 'ركن سبل الافق' AND gle.is_cancelled = 0
+                WHERE acc.company = 'ركن سبل الافق'
+                AND (acc.account_type IN ('Cash', 'Bank') OR acc.account_number IN ('1110', '1201', '1120'))
+                GROUP BY acc.name
+                ORDER BY balance DESC
+            """
+        },
+        {
+            "key": "vat_analysis",
+            "title": "استعلام تحليل ضريبة القيمة المضافة 15%",
+            "sql": """
+                SELECT 
+                    CASE 
+                        WHEN acc.account_number = '1510' OR acc.name LIKE '%%1510%%' THEN 'ضريبة المدخلات (مشتريات 15%)'
+                        WHEN acc.account_number = '2330' OR acc.name LIKE '%%2330%%' THEN 'ضريبة المخرجات (مبيعات 15%)'
+                        ELSE 'ضرائب ورسوم أخرى'
+                    END AS vat_type,
+                    COALESCE(SUM(gle.debit + gle.credit), 0) AS vat_amount
+                FROM `tabGL Entry` gle
+                JOIN `tabAccount` acc ON gle.account = acc.name
+                WHERE gle.company = 'ركن سبل الافق' AND gle.is_cancelled = 0
+                AND (acc.account_type = 'Tax' OR acc.account_number IN ('1510', '2330') OR acc.name LIKE '%%1510%%' OR acc.name LIKE '%%2330%%')
+                GROUP BY vat_type
+            """
+        },
+        {
+            "key": "detailed_ledger",
+            "title": "استعلام سجل الحركات المالية التفصيلي",
+            "sql": """
+                SELECT 
+                    gle.posting_date,
+                    acc.account_name,
+                    COALESCE(p.project_name, gle.project, '-') AS project_name,
+                    gle.debit,
+                    gle.credit,
+                    gle.remarks
+                FROM `tabGL Entry` gle
+                JOIN `tabAccount` acc ON gle.account = acc.name
+                LEFT JOIN `tabProject` p ON gle.project = p.name
+                WHERE gle.company = 'ركن سبل الافق' AND gle.is_cancelled = 0
+                ORDER BY gle.posting_date DESC, gle.creation DESC
+                LIMIT 50
+            """
+        },
+        {
+            "key": "projects_progress",
+            "title": "استعلام نسب إنجاز المشروعات الإنشائية الميدانية",
+            "sql": """
+                SELECT 
+                    project_name,
+                    status,
+                    percent_complete
+                FROM `tabProject`
+                WHERE company = 'ركن سبل الافق'
+                ORDER BY creation DESC
+                LIMIT 15
+            """
+        },
+        {
+            "key": "tasks_status",
+            "title": "استعلام توزيع المهام الميدانية حسب الحالة",
+            "sql": """
+                SELECT 
+                    status,
+                    COUNT(name) AS task_count
+                FROM `tabTask`
+                GROUP BY status
+            """
+        },
+        {
+            "key": "kpi_po",
+            "title": "استعلام إجمالي أوامر الشراء المعتمدة (SAR)",
+            "sql": """
+                SELECT 
+                    COALESCE(SUM(grand_total), 0) AS po_total
+                FROM `tabPurchase Order`
+                WHERE company = 'ركن سبل الافق' AND docstatus = 1
+            """
+        },
+        {
+            "key": "kpi_pi",
+            "title": "استعلام إجمالي فواتير المشتريات ومواد البناء (SAR)",
+            "sql": """
+                SELECT 
+                    COALESCE(SUM(grand_total), 0) AS pi_total
+                FROM `tabPurchase Invoice`
+                WHERE company = 'ركن سبل الافق' AND docstatus = 1
+            """
+        },
+        {
+            "key": "suppliers_donut",
+            "title": "استعلام توزيع المشتريات ومواد البناء حسب الموردين",
+            "sql": """
+                SELECT 
+                    supplier,
+                    COALESCE(SUM(grand_total), 0) AS supplier_total
+                FROM `tabPurchase Invoice`
+                WHERE company = 'ركن سبل الافق' AND docstatus = 1
+                GROUP BY supplier
+                ORDER BY supplier_total DESC
+                LIMIT 10
+            """
+        },
+        {
+            "key": "kpi_emp",
+            "title": "استعلام إجمالي الكوادر البشرية النشطة",
+            "sql": """
+                SELECT 
+                    COUNT(name) AS employee_count
+                FROM `tabEmployee`
+                WHERE company = 'ركن سبل الافق' AND status = 'Active'
+            """
+        },
+        {
+            "key": "hr_dept",
+            "title": "استعلام توزيع الكوادر حسب الأقسام والمسميات",
+            "sql": """
+                SELECT 
+                    COALESCE(NULLIF(department, ''), 'إداري عام') AS dept_label,
+                    COUNT(name) AS staff_count
+                FROM `tabEmployee`
+                WHERE company = 'ركن سبل الافق'
+                GROUP BY department
+            """
+        },
+        {
+            "key": "sales_ipcs",
+            "title": "استعلام سجل الفواتير والمستخلصات الضريبية المعتمدة",
+            "sql": """
+                SELECT 
+                    name,
+                    customer,
+                    project,
+                    base_grand_total,
+                    outstanding_amount
+                FROM `tabSales Invoice`
+                WHERE company = 'ركن سبل الافق' AND docstatus = 1
+                ORDER BY posting_date DESC
+                LIMIT 50
+            """
+        },
     ]
 
-    query_map = {}
-    for q in queries_def:
-        existing = frappe.get_all("Insights Query v3", filters={"workbook": wb_name, "title": q["title"]}, pluck="name")
+    q_map = {}
+    for q_cfg in queries_def:
+        ops = [{"type": "sql", "data_source": "Site DB", "raw_sql": q_cfg["sql"]}]
+        existing = frappe.get_all("Insights Query v3", filters={"workbook": wb_name, "title": q_cfg["title"]}, pluck="name")
         if existing:
-            query_map[q["key"]] = existing[0]
+            q_doc = frappe.get_doc("Insights Query v3", existing[0])
+            q_doc.use_live_connection = 1
+            q_doc.is_builder_query = 0
+            q_doc.is_native_query = 1
+            q_doc.operations = json.dumps(ops)
+            q_doc.save(ignore_permissions=True)
+            q_map[q_cfg["title"]] = q_doc.name
         else:
-            ops = [{"type": "source", "table": {"type": "table", "data_source": "Site DB", "table_name": q["table"]}}]
-            doc = frappe.new_doc("Insights Query v3")
-            doc.title = q["title"]
-            doc.workbook = wb_name
-            doc.use_live_connection = 1
-            doc.is_builder_query = 1
-            doc.operations = json.dumps(ops)
-            doc.insert(ignore_permissions=True)
-            query_map[q["key"]] = doc.name
+            q_doc = frappe.new_doc("Insights Query v3")
+            q_doc.title = q_cfg["title"]
+            q_doc.workbook = wb_name
+            q_doc.use_live_connection = 1
+            q_doc.is_builder_query = 0
+            q_doc.is_native_query = 1
+            q_doc.operations = json.dumps(ops)
+            q_doc.insert(ignore_permissions=True)
+            q_map[q_cfg["title"]] = q_doc.name
     frappe.db.commit()
 
     charts_def = [
-        # CEO / Finance KPIs
-        {"key": "kpi_liquidity", "title": "إجمالي السيولة النقدية والبنكية (SAR)", "query_key": "gl", "chart_type": "Number", "config": {"comparison": False, "decimal": "2", "shorten_numbers": True, "sparkline": False, "number_columns": [{"measure_name": "السيولة المتاحة", "column_name": "debit", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}]}},
-        {"key": "kpi_contracts", "title": "إجمالي عقود ومستخلصات المشاريع", "query_key": "sales", "chart_type": "Number", "config": {"comparison": False, "decimal": "2", "shorten_numbers": True, "sparkline": False, "number_columns": [{"measure_name": "إجمالي المستخلصات", "column_name": "base_grand_total", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}]}},
-        {"key": "kpi_expenses", "title": "إجمالي المصروفات التشغيلية", "query_key": "gl", "chart_type": "Number", "config": {"comparison": False, "decimal": "2", "shorten_numbers": True, "sparkline": False, "number_columns": [{"measure_name": "المصروفات", "column_name": "debit", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}]}},
-        {"key": "kpi_vat", "title": "صافي موقف ضريبة القيمة المضافة 15%", "query_key": "gl", "chart_type": "Number", "config": {"comparison": False, "decimal": "2", "shorten_numbers": True, "sparkline": False, "number_columns": [{"measure_name": "صافي الضريبة", "column_name": "credit", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}]}},
-        {"key": "chart_expenses_donut", "title": "توزيع المصروفات حسب البند المحاسبي", "query_key": "gl", "chart_type": "Donut", "config": {"filters": {"filters": [], "logical_operator": "And"}, "label_column": {"column_name": "account", "data_type": "String", "dimension_name": "account", "label": "الحساب المحاسبي", "value": "account"}, "limit": 20, "value_column": {"aggregation": "sum", "column_name": "debit", "data_type": "Decimal", "measure_name": "إجمالي المدين"}}},
-        {"key": "chart_projects_bar", "title": "تحليل الأداء المالي للمشاريع ومراكز التكلفة (الإيرادات مقابل التكاليف)", "query_key": "gl", "chart_type": "Bar", "config": {"filters": {"filters": [], "logical_operator": "And"}, "grouping": "clustered", "limit": "20", "x_axis": {"dimension": {"column_name": "project", "data_type": "String", "dimension_name": "project", "label": "المشروع", "value": "project"}}, "y_axis": {"series": [{"measure": {"aggregation": "sum", "column_name": "debit", "data_type": "Decimal", "label": "التكاليف المباشرة", "measure_name": "التكاليف"}}, {"measure": {"aggregation": "sum", "column_name": "credit", "data_type": "Decimal", "label": "المستخلصات المحصلة", "measure_name": "الإيرادات"}}]}}},
-        {"key": "chart_cashflow_line", "title": "منحنى التدفقات النقدية الشهرية وحركة الأستاذ العام", "query_key": "gl", "chart_type": "Bar", "config": {"filters": {"filters": [], "logical_operator": "And"}, "grouping": "stacked", "limit": "12", "x_axis": {"dimension": {"column_name": "posting_date", "data_type": "Datetime", "dimension_name": "posting_date", "granularity": "month", "label": "تاريخ الحركة", "value": "posting_date"}}, "y_axis": {"series": [{"measure": {"aggregation": "sum", "column_name": "debit", "data_type": "Decimal", "label": "المقبوضات / مدين", "measure_name": "المقبوضات"}}, {"measure": {"aggregation": "sum", "column_name": "credit", "data_type": "Decimal", "label": "المدفوعات / دائن", "measure_name": "المدفوعات"}}]}}},
-        {"key": "table_accounts_summary", "title": "كشف أرصدة الحسابات الرئيسية والبنوك والعهد", "query_key": "accounts", "chart_type": "Table", "config": {"filters": {"filters": [], "logical_operator": "And"}, "limit": 50, "rows": [{"column_name": "name", "data_type": "String", "dimension_name": "name", "label": "اسم الحساب", "value": "name"}, {"column_name": "account_type", "data_type": "String", "dimension_name": "account_type", "label": "نوع الحساب", "value": "account_type"}], "columns": [], "values": [{"aggregation": "count", "column_name": "name", "data_type": "Integer", "label": "عدد الحسابات", "measure_name": "count"}]}},
-        {"key": "chart_bank_custody_bar", "title": "تفصيل أرصدة البنوك والصناديق وعهد المهندسين (حساب 1120)", "query_key": "gl", "chart_type": "Bar", "config": {"filters": {"filters": [], "logical_operator": "And"}, "limit": "15", "x_axis": {"dimension": {"column_name": "account", "data_type": "String", "dimension_name": "account", "label": "حساب الصندوق / البنك / العهدة", "value": "account"}}, "y_axis": {"series": [{"measure": {"aggregation": "sum", "column_name": "debit", "data_type": "Decimal", "label": "رصيد الحساب", "measure_name": "الرصيد"}}]}}},
-        {"key": "chart_vat_pie", "title": "تحليل ضريبة القيمة المضافة 15% (مدخلات المشتريات 1510 مقابل مخرجات المبيعات 2330)", "query_key": "gl", "chart_type": "Donut", "config": {"filters": {"filters": [], "logical_operator": "And"}, "label_column": {"column_name": "voucher_type", "data_type": "String", "dimension_name": "voucher_type", "label": "نوع المستند الضريبي", "value": "voucher_type"}, "limit": 10, "value_column": {"aggregation": "sum", "column_name": "debit", "data_type": "Decimal", "measure_name": "مبلغ الضريبة"}}},
-        {"key": "chart_hr_headcount", "title": "توزيع الكوادر البشرية والموظفين حسب الأقسام والمسميات الوظيفية", "query_key": "employees", "chart_type": "Bar", "config": {"filters": {"filters": [], "logical_operator": "And"}, "limit": "20", "x_axis": {"dimension": {"column_name": "department", "data_type": "String", "dimension_name": "department", "label": "القسم / الإدارة", "value": "department"}}, "y_axis": {"series": [{"measure": {"aggregation": "count", "column_name": "name", "data_type": "Integer", "label": "عدد الكوادر", "measure_name": "العدد"}}]}}},
-        {"key": "table_detailed_ledger", "title": "سجل الحركات المالية التفصيلي حسب المشروع ومركز التكلفة", "query_key": "gl", "chart_type": "Table", "config": {"filters": {"filters": [], "logical_operator": "And"}, "limit": 50, "rows": [{"column_name": "posting_date", "data_type": "Date", "dimension_name": "posting_date", "label": "تاريخ الحركة", "value": "posting_date"}, {"column_name": "account", "data_type": "String", "dimension_name": "account", "label": "اسم الحساب", "value": "account"}, {"column_name": "project", "data_type": "String", "dimension_name": "project", "label": "المشروع", "value": "project"}], "columns": [], "values": [{"aggregation": "sum", "column_name": "debit", "data_type": "Decimal", "label": "مدين", "measure_name": "مدين"}, {"aggregation": "sum", "column_name": "credit", "data_type": "Decimal", "label": "دائن", "measure_name": "دائن"}]}},
-        # Projects & Tasks
-        {"key": "chart_projects_progress", "title": "نسب إنجاز المشروعات الإنشائية الميدانية", "query_key": "projects", "chart_type": "Bar", "config": {"filters": {"filters": [], "logical_operator": "And"}, "limit": "15", "x_axis": {"dimension": {"column_name": "project_name", "data_type": "String", "dimension_name": "project_name", "label": "المشروع", "value": "project_name"}}, "y_axis": {"series": [{"measure": {"aggregation": "avg", "column_name": "percent_complete", "data_type": "Decimal", "label": "نسبة الإنجاز %", "measure_name": "الإنجاز"}}]}}},
-        {"key": "chart_tasks_status", "title": "توزيع المهام الميدانية حسب الحالة", "query_key": "tasks", "chart_type": "Donut", "config": {"filters": {"filters": [], "logical_operator": "And"}, "label_column": {"column_name": "status", "data_type": "String", "dimension_name": "status", "label": "حالة المهمة", "value": "status"}, "limit": 10, "value_column": {"aggregation": "count", "column_name": "name", "data_type": "Integer", "measure_name": "عدد المهام"}}},
-        # Procurement
-        {"key": "kpi_po_total", "title": "إجمالي أوامر الشراء المعتمدة (SAR)", "query_key": "po", "chart_type": "Number", "config": {"comparison": False, "decimal": "2", "shorten_numbers": True, "sparkline": False, "number_columns": [{"measure_name": "أوامر الشراء", "column_name": "grand_total", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}]}},
-        {"key": "kpi_pi_total", "title": "إجمالي فواتير المشتريات ومواد البناء", "query_key": "pi", "chart_type": "Number", "config": {"comparison": False, "decimal": "2", "shorten_numbers": True, "sparkline": False, "number_columns": [{"measure_name": "فواتير المشتريات", "column_name": "grand_total", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}]}},
-        {"key": "chart_suppliers_donut", "title": "توزيع المشتريات ومواد البناء حسب الموردين", "query_key": "pi", "chart_type": "Donut", "config": {"filters": {"filters": [], "logical_operator": "And"}, "label_column": {"column_name": "supplier", "data_type": "String", "dimension_name": "supplier", "label": "المورد", "value": "supplier"}, "limit": 10, "value_column": {"aggregation": "sum", "column_name": "grand_total", "data_type": "Decimal", "measure_name": "إجمالي المشتريات"}}},
-        # HR & Custodies
-        {"key": "kpi_employees_count", "title": "إجمالي الكوادر البشرية النشطة", "query_key": "employees", "chart_type": "Number", "config": {"comparison": False, "decimal": "0", "shorten_numbers": False, "sparkline": False, "number_columns": [{"measure_name": "عدد الكوادر", "column_name": "name", "data_type": "Integer", "aggregation": "count", "format": "number"}]}},
-        # Invoicing & Tax
-        {"key": "table_sales_ipcs", "title": "سجل الفواتير والمستخلصات الضريبية المعتمدة", "query_key": "sales", "chart_type": "Table", "config": {"filters": {"filters": [], "logical_operator": "And"}, "limit": 50, "rows": [{"column_name": "name", "data_type": "String", "dimension_name": "name", "label": "رقم الفاتورة", "value": "name"}, {"column_name": "customer", "data_type": "String", "dimension_name": "customer", "label": "العميل", "value": "customer"}, {"column_name": "project", "data_type": "String", "dimension_name": "project", "label": "المشروع", "value": "project"}], "columns": [], "values": [{"aggregation": "sum", "column_name": "base_grand_total", "data_type": "Decimal", "label": "الإجمالي", "measure_name": "base_grand_total"}, {"aggregation": "sum", "column_name": "outstanding_amount", "data_type": "Decimal", "label": "المتبقي", "measure_name": "outstanding_amount"}]}}
+        # CEO & Finance KPIs
+        {
+            "key": "kpi_liquidity",
+            "title": "إجمالي السيولة النقدية والبنكية (SAR)",
+            "query_title": "استعلام السيولة النقدية والبنكية والعهد (SAR)",
+            "chart_type": "Number",
+            "config": {
+                "comparison": False,
+                "decimal": "2",
+                "shorten_numbers": True,
+                "sparkline": False,
+                "number_columns": [
+                    {"measure_name": "السيولة المتاحة (SAR)", "column_name": "liquidity", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}
+                ]
+            }
+        },
+        {
+            "key": "kpi_contracts",
+            "title": "إجمالي عقود ومستخلصات المشاريع",
+            "query_title": "استعلام إجمالي عقود ومستخلصات المشاريع المعتمدة (SAR)",
+            "chart_type": "Number",
+            "config": {
+                "comparison": False,
+                "decimal": "2",
+                "shorten_numbers": True,
+                "sparkline": False,
+                "number_columns": [
+                    {"measure_name": "إجمالي المستخلصات (SAR)", "column_name": "contracts_total", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}
+                ]
+            }
+        },
+        {
+            "key": "kpi_expenses",
+            "title": "إجمالي المصروفات التشغيلية",
+            "query_title": "استعلام إجمالي المصروفات التشغيلية المباشرة (SAR)",
+            "chart_type": "Number",
+            "config": {
+                "comparison": False,
+                "decimal": "2",
+                "shorten_numbers": True,
+                "sparkline": False,
+                "number_columns": [
+                    {"measure_name": "المصروفات التشغيلية (SAR)", "column_name": "expenses_total", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}
+                ]
+            }
+        },
+        {
+            "key": "kpi_vat",
+            "title": "صافي موقف ضريبة القيمة المضافة 15%",
+            "query_title": "استعلام موقف ضريبة القيمة المضافة 15% (SAR)",
+            "chart_type": "Number",
+            "config": {
+                "comparison": False,
+                "decimal": "2",
+                "shorten_numbers": True,
+                "sparkline": False,
+                "number_columns": [
+                    {"measure_name": "صافي الضريبة (SAR)", "column_name": "net_vat", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}
+                ]
+            }
+        },
+        {
+            "key": "chart_expenses_donut",
+            "title": "توزيع المصروفات حسب البند المحاسبي",
+            "query_title": "استعلام توزيع المصروفات حسب البند المحاسبي",
+            "chart_type": "Donut",
+            "config": {
+                "filters": {"filters": [], "logical_operator": "And"},
+                "label_column": {"column_name": "account_label", "data_type": "String", "dimension_name": "account_label", "label": "البند المحاسبي", "value": "account_label"},
+                "limit": 10,
+                "value_column": {"aggregation": "sum", "column_name": "expense_amount", "data_type": "Decimal", "measure_name": "مبلغ المصروف"}
+            }
+        },
+        {
+            "key": "chart_projects_bar",
+            "title": "تحليل الأداء المالي للمشاريع ومراكز التكلفة (الإيرادات مقابل التكاليف)",
+            "query_title": "استعلام الأداء المالي للمشاريع (التكاليف مقابل الإيرادات)",
+            "chart_type": "Bar",
+            "config": {
+                "filters": {"filters": [], "logical_operator": "And"},
+                "grouping": "clustered",
+                "limit": "15",
+                "x_axis": {"dimension": {"column_name": "project_label", "data_type": "String", "dimension_name": "project_label", "label": "المشروع", "value": "project_label"}},
+                "y_axis": {
+                    "series": [
+                        {"measure": {"aggregation": "sum", "column_name": "direct_cost", "data_type": "Decimal", "label": "التكاليف المباشرة", "measure_name": "التكاليف"}},
+                        {"measure": {"aggregation": "sum", "column_name": "revenue", "data_type": "Decimal", "label": "المستخلصات المعتمدة", "measure_name": "الإيرادات"}}
+                    ]
+                }
+            }
+        },
+        {
+            "key": "chart_cashflow_line",
+            "title": "منحنى التدفقات النقدية الشهرية وحركة الأستاذ العام",
+            "query_title": "استعلام منحنى التدفقات النقدية الشهرية",
+            "chart_type": "Bar",
+            "config": {
+                "filters": {"filters": [], "logical_operator": "And"},
+                "grouping": "stacked",
+                "limit": "12",
+                "x_axis": {"dimension": {"column_name": "month_date", "data_type": "Date", "dimension_name": "month_date", "label": "الشهر", "value": "month_date"}},
+                "y_axis": {
+                    "series": [
+                        {"measure": {"aggregation": "sum", "column_name": "inflows", "data_type": "Decimal", "label": "المقبوضات / مدين", "measure_name": "المقبوضات"}},
+                        {"measure": {"aggregation": "sum", "column_name": "outflows", "data_type": "Decimal", "label": "المدفوعات / دائن", "measure_name": "المدفوعات"}}
+                    ]
+                }
+            }
+        },
+        {
+            "key": "table_accounts_summary",
+            "title": "كشف أرصدة الحسابات الرئيسية والبنوك والعهد",
+            "query_title": "استعلام كشف أرصدة الحسابات الرئيسية والبنوك والعهد",
+            "chart_type": "Table",
+            "config": {
+                "filters": {"filters": [], "logical_operator": "And"},
+                "limit": 50,
+                "rows": [
+                    {"column_name": "account_number", "data_type": "String", "dimension_name": "account_number", "label": "رقم الحساب", "value": "account_number"},
+                    {"column_name": "account_name", "data_type": "String", "dimension_name": "account_name", "label": "اسم الحساب", "value": "account_name"},
+                    {"column_name": "account_type", "data_type": "String", "dimension_name": "account_type", "label": "نوع الحساب", "value": "account_type"}
+                ],
+                "columns": [],
+                "values": [
+                    {"aggregation": "sum", "column_name": "current_balance", "data_type": "Decimal", "label": "الرصيد الفعلي", "measure_name": "الرصيد"}
+                ]
+            }
+        },
+        {
+            "key": "chart_bank_custody_bar",
+            "title": "تفصيل أرصدة البنوك والصناديق وعهد المهندسين (حساب 1120)",
+            "query_title": "استعلام تفصيل أرصدة البنوك والصناديق والعهد",
+            "chart_type": "Bar",
+            "config": {
+                "filters": {"filters": [], "logical_operator": "And"},
+                "limit": "15",
+                "x_axis": {"dimension": {"column_name": "account_name", "data_type": "String", "dimension_name": "account_name", "label": "الحساب / العهدة", "value": "account_name"}},
+                "y_axis": {
+                    "series": [
+                        {"measure": {"aggregation": "sum", "column_name": "balance", "data_type": "Decimal", "label": "رصيد الحساب", "measure_name": "الرصيد"}}
+                    ]
+                }
+            }
+        },
+        {
+            "key": "chart_vat_pie",
+            "title": "تحليل ضريبة القيمة المضافة 15% (مدخلات المشتريات 1510 مقابل مخرجات المبيعات 2330)",
+            "query_title": "استعلام تحليل ضريبة القيمة المضافة 15%",
+            "chart_type": "Donut",
+            "config": {
+                "filters": {"filters": [], "logical_operator": "And"},
+                "label_column": {"column_name": "vat_type", "data_type": "String", "dimension_name": "vat_type", "label": "نوع المعاملة الضريبية", "value": "vat_type"},
+                "limit": 10,
+                "value_column": {"aggregation": "sum", "column_name": "vat_amount", "data_type": "Decimal", "measure_name": "المبلغ الضريبي"}
+            }
+        },
+        {
+            "key": "table_detailed_ledger",
+            "title": "سجل الحركات المالية التفصيلي حسب المشروع ومركز التكلفة",
+            "query_title": "استعلام سجل الحركات المالية التفصيلي",
+            "chart_type": "Table",
+            "config": {
+                "filters": {"filters": [], "logical_operator": "And"},
+                "limit": 50,
+                "rows": [
+                    {"column_name": "posting_date", "data_type": "Date", "dimension_name": "posting_date", "label": "تاريخ الحركة", "value": "posting_date"},
+                    {"column_name": "account_name", "data_type": "String", "dimension_name": "account_name", "label": "اسم الحساب", "value": "account_name"},
+                    {"column_name": "project_name", "data_type": "String", "dimension_name": "project_name", "label": "المشروع", "value": "project_name"}
+                ],
+                "columns": [],
+                "values": [
+                    {"aggregation": "sum", "column_name": "debit", "data_type": "Decimal", "label": "مدين", "measure_name": "مدين"},
+                    {"aggregation": "sum", "column_name": "credit", "data_type": "Decimal", "label": "دائن", "measure_name": "دائن"}
+                ]
+            }
+        },
+        {
+            "key": "chart_projects_progress",
+            "title": "نسب إنجاز المشروعات الإنشائية الميدانية",
+            "query_title": "استعلام نسب إنجاز المشروعات الإنشائية الميدانية",
+            "chart_type": "Bar",
+            "config": {
+                "filters": {"filters": [], "logical_operator": "And"},
+                "limit": "15",
+                "x_axis": {"dimension": {"column_name": "project_name", "data_type": "String", "dimension_name": "project_name", "label": "المشروع", "value": "project_name"}},
+                "y_axis": {
+                    "series": [
+                        {"measure": {"aggregation": "avg", "column_name": "percent_complete", "data_type": "Decimal", "label": "نسبة الإنجاز %", "measure_name": "الإنجاز"}}
+                    ]
+                }
+            }
+        },
+        {
+            "key": "chart_tasks_status",
+            "title": "توزيع المهام الميدانية حسب الحالة",
+            "query_title": "استعلام توزيع المهام الميدانية حسب الحالة",
+            "chart_type": "Donut",
+            "config": {
+                "filters": {"filters": [], "logical_operator": "And"},
+                "label_column": {"column_name": "status", "data_type": "String", "dimension_name": "status", "label": "حالة المهمة", "value": "status"},
+                "limit": 10,
+                "value_column": {"aggregation": "sum", "column_name": "task_count", "data_type": "Integer", "measure_name": "عدد المهام"}
+            }
+        },
+        {
+            "key": "kpi_po_total",
+            "title": "إجمالي أوامر الشراء المعتمدة (SAR)",
+            "query_title": "استعلام إجمالي أوامر الشراء المعتمدة (SAR)",
+            "chart_type": "Number",
+            "config": {
+                "comparison": False,
+                "decimal": "2",
+                "shorten_numbers": True,
+                "sparkline": False,
+                "number_columns": [
+                    {"measure_name": "أوامر الشراء (SAR)", "column_name": "po_total", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}
+                ]
+            }
+        },
+        {
+            "key": "kpi_pi_total",
+            "title": "إجمالي فواتير المشتريات ومواد البناء",
+            "query_title": "استعلام إجمالي فواتير المشتريات ومواد البناء (SAR)",
+            "chart_type": "Number",
+            "config": {
+                "comparison": False,
+                "decimal": "2",
+                "shorten_numbers": True,
+                "sparkline": False,
+                "number_columns": [
+                    {"measure_name": "فواتير المشتريات (SAR)", "column_name": "pi_total", "data_type": "Decimal", "aggregation": "sum", "format": "currency"}
+                ]
+            }
+        },
+        {
+            "key": "chart_suppliers_donut",
+            "title": "توزيع المشتريات ومواد البناء حسب الموردين",
+            "query_title": "استعلام توزيع المشتريات ومواد البناء حسب الموردين",
+            "chart_type": "Donut",
+            "config": {
+                "filters": {"filters": [], "logical_operator": "And"},
+                "label_column": {"column_name": "supplier", "data_type": "String", "dimension_name": "supplier", "label": "المورد", "value": "supplier"},
+                "limit": 10,
+                "value_column": {"aggregation": "sum", "column_name": "supplier_total", "data_type": "Decimal", "measure_name": "إجمالي المشتريات"}
+            }
+        },
+        {
+            "key": "kpi_employees_count",
+            "title": "إجمالي الكوادر البشرية النشطة",
+            "query_title": "استعلام إجمالي الكوادر البشرية النشطة",
+            "chart_type": "Number",
+            "config": {
+                "comparison": False,
+                "decimal": "0",
+                "shorten_numbers": False,
+                "sparkline": False,
+                "number_columns": [
+                    {"measure_name": "عدد الكوادر النشطة", "column_name": "employee_count", "data_type": "Integer", "aggregation": "sum", "format": "number"}
+                ]
+            }
+        },
+        {
+            "key": "chart_hr_headcount",
+            "title": "توزيع الكوادر البشرية والموظفين حسب الأقسام والمسميات الوظيفية",
+            "query_title": "استعلام توزيع الكوادر حسب الأقسام والمسميات",
+            "chart_type": "Bar",
+            "config": {
+                "filters": {"filters": [], "logical_operator": "And"},
+                "limit": "20",
+                "x_axis": {"dimension": {"column_name": "dept_label", "data_type": "String", "dimension_name": "dept_label", "label": "القسم / الإدارة", "value": "dept_label"}},
+                "y_axis": {
+                    "series": [
+                        {"measure": {"aggregation": "sum", "column_name": "staff_count", "data_type": "Integer", "label": "عدد الكوادر", "measure_name": "العدد"}}
+                    ]
+                }
+            }
+        },
+        {
+            "key": "table_sales_ipcs",
+            "title": "سجل الفواتير والمستخلصات الضريبية المعتمدة",
+            "query_title": "استعلام سجل الفواتير والمستخلصات الضريبية المعتمدة",
+            "chart_type": "Table",
+            "config": {
+                "filters": {"filters": [], "logical_operator": "And"},
+                "limit": 50,
+                "rows": [
+                    {"column_name": "name", "data_type": "String", "dimension_name": "name", "label": "رقم المستخلص / الفاتورة", "value": "name"},
+                    {"column_name": "customer", "data_type": "String", "dimension_name": "customer", "label": "العميل", "value": "customer"},
+                    {"column_name": "project", "data_type": "String", "dimension_name": "project", "label": "المشروع", "value": "project"}
+                ],
+                "columns": [],
+                "values": [
+                    {"aggregation": "sum", "column_name": "base_grand_total", "data_type": "Decimal", "label": "الإجمالي", "measure_name": "base_grand_total"},
+                    {"aggregation": "sum", "column_name": "outstanding_amount", "data_type": "Decimal", "label": "المتبقي", "measure_name": "outstanding_amount"}
+                ]
+            }
+        }
     ]
 
     chart_map = {}
-    for c in charts_def:
-        existing = frappe.get_all("Insights Chart v3", filters={"workbook": wb_name, "title": c["title"]}, pluck="name")
+    for c_cfg in charts_def:
+        q_id = q_map.get(c_cfg["query_title"])
+        if not q_id:
+            continue
+        existing = frappe.get_all("Insights Chart v3", filters={"workbook": wb_name, "title": c_cfg["title"]}, pluck="name")
         if existing:
-            chart_map[c["key"]] = existing[0]
-            # Ensure is_public is set
-            frappe.db.set_value("Insights Chart v3", existing[0], "is_public", 1)
+            c_doc = frappe.get_doc("Insights Chart v3", existing[0])
+            c_doc.query = q_id
+            c_doc.chart_type = c_cfg["chart_type"]
+            c_doc.config = json.dumps(c_cfg["config"])
+            c_doc.is_public = 0
+            c_doc.permission_user = "Administrator"
+            c_doc.save(ignore_permissions=True)
+            chart_map[c_cfg["key"]] = c_doc.name
         else:
-            doc = frappe.new_doc("Insights Chart v3")
-            doc.title = c["title"]
-            doc.workbook = wb_name
-            doc.query = query_map[c["query_key"]]
-            doc.chart_type = c["chart_type"]
-            doc.config = json.dumps(c["config"])
-            doc.is_public = 1
-            doc.insert(ignore_permissions=True)
-            chart_map[c["key"]] = doc.name
+            c_doc = frappe.new_doc("Insights Chart v3")
+            c_doc.title = c_cfg["title"]
+            c_doc.workbook = wb_name
+            c_doc.query = q_id
+            c_doc.chart_type = c_cfg["chart_type"]
+            c_doc.config = json.dumps(c_cfg["config"])
+            c_doc.is_public = 0
+            c_doc.permission_user = "Administrator"
+            c_doc.insert(ignore_permissions=True)
+            chart_map[c_cfg["key"]] = c_doc.name
     frappe.db.commit()
 
     # The 6 Contracting Dashboards
@@ -230,10 +776,10 @@ def sync_insights_contracting_dashboards():
         },
     ]
 
+    dashboard_ids = []
     for d_cfg in dashboards_config:
         existing = frappe.get_all("Insights Dashboard v3", filters={"title": d_cfg["title"]}, pluck="name")
         if not existing:
-            # Also check old titles for rename
             if d_cfg["id_slug"] == "dsh_ceo":
                 existing = frappe.get_all("Insights Dashboard v3", filters={"title": "لوحة المالك والمدير العام - الملخص التنفيذي الشامل"}, pluck="name")
             elif d_cfg["id_slug"] == "dsh_billing_tax":
@@ -243,31 +789,51 @@ def sync_insights_contracting_dashboards():
             d = frappe.get_doc("Insights Dashboard v3", existing[0])
             d.title = d_cfg["title"]
             d.workbook = wb_name
-            d.is_public = 1
+            d.is_public = 0
+            d.permission_user = "Administrator"
             d.items = json.dumps(d_cfg["items"])
             d.set("linked_charts", [])
             for item in d_cfg["items"]:
                 d.append("linked_charts", {"chart": item["chart"]})
             d.save(ignore_permissions=True)
+            dashboard_ids.append(d.name)
             print(f" -> Updated Dashboard: {d_cfg['title']} ({d.name})")
         else:
             d = frappe.new_doc("Insights Dashboard v3")
             d.title = d_cfg["title"]
             d.workbook = wb_name
-            d.is_public = 1
+            d.is_public = 0
+            d.permission_user = "Administrator"
             d.items = json.dumps(d_cfg["items"])
             for item in d_cfg["items"]:
                 d.append("linked_charts", {"chart": item["chart"]})
             d.insert(ignore_permissions=True)
+            dashboard_ids.append(d.name)
             print(f" -> Created Dashboard: {d_cfg['title']} ({d.name})")
+
+    frappe.db.commit()
+
+    # Share Workbook 1 and all 6 Dashboards with management users
+    target_users = ["alyahmedelseidy@gmail.com", "director@elsaidy.org"]
+    for u in target_users:
+        if not frappe.db.exists("DocShare", {"share_doctype": "Insights Workbook", "share_name": wb_name, "user": u}):
+            frappe.share.add("Insights Workbook", wb_name, u, read=1, write=0, share=0)
+            print(f" -> Shared Workbook 1 with {u}")
+        for d_id in dashboard_ids:
+            if not frappe.db.exists("DocShare", {"share_doctype": "Insights Dashboard v3", "share_name": d_id, "user": u}):
+                frappe.share.add("Insights Dashboard v3", d_id, u, read=1, write=0, share=0)
+                print(f" -> Shared Dashboard {d_id} with {u}")
 
     frappe.db.commit()
 
 
 def sync_executive_manager_portal():
     """
-    Creates 'Executive Director (Read Only)' role and user 'director@elsaidy.org',
-    with strict Read-Only permissions on contracting and dashboard doctypes.
+    Ensures 'Executive Director (Read Only)' role and user 'director@elsaidy.org' exist,
+    without sabotaging standard DocPerm entries for other system roles.
+    Copies standard DocPerms to Custom DocPerms so System Manager, Insights User,
+    Insights Admin, Accounts User, Projects User, etc. maintain full native access.
+    Grants table and data source access in Insights Team.
     """
     print("\n[Finalization] 4. Synchronizing Executive Manager Portal Role & User...")
     role_name = "Executive Director (Read Only)"
@@ -278,48 +844,51 @@ def sync_executive_manager_portal():
         r.insert(ignore_permissions=True)
         print(f" -> Created Role: {role_name}")
 
-    # Read-only doctypes
-    read_only_doctypes = [
-        "Insights Dashboard v3",
-        "Insights Chart v3",
-        "Insights Query v3",
-        "Insights Workbook",
-        "Project",
-        "Task",
-        "GL Entry",
-        "Account",
-        "Sales Invoice",
-        "Purchase Invoice",
-        "Employee",
-        "Elsaidy Share Link",
+    target_dts = [
+        "Insights Dashboard v3", "Insights Chart v3", "Insights Query v3", "Insights Workbook",
+        "Project", "Task", "GL Entry", "Account", "Sales Invoice", "Purchase Invoice", "Employee", "Elsaidy Share Link"
     ]
 
-    for dt in read_only_doctypes:
+    for dt in target_dts:
         if not frappe.db.exists("DocType", dt):
             continue
-        existing_perm = frappe.db.exists("Custom DocPerm", {"parent": dt, "role": role_name, "permlevel": 0})
-        if not existing_perm:
-            try:
-                cp = frappe.new_doc("Custom DocPerm")
-                cp.parent = dt
-                cp.parenttype = "DocType"
-                cp.parentfield = "permissions"
-                cp.role = role_name
-                cp.permlevel = 0
-                cp.read = 1
-                cp.write = 0
-                cp.create = 0
-                cp.delete = 0
-                cp.submit = 0
-                cp.cancel = 0
-                cp.amend = 0
-                cp.report = 1
-                cp.export = 1
-                cp.print = 1
-                cp.email = 1
-                cp.insert(ignore_permissions=True)
-            except Exception as e:
-                pass
+        std_perms = frappe.get_all("DocPerm", filters={"parent": dt}, fields=["*"])
+        custom_perms = frappe.get_all("Custom DocPerm", filters={"parent": dt}, fields=["*"])
+        existing_roles = {cp["role"] for cp in custom_perms}
+
+        # Preserve all standard roles in Custom DocPerm
+        for sp in std_perms:
+            if sp["role"] not in existing_roles:
+                new_cp = frappe.new_doc("Custom DocPerm")
+                for k, v in sp.items():
+                    if k not in ["name", "owner", "creation", "modified", "modified_by", "idx", "docstatus"]:
+                        setattr(new_cp, k, v)
+                new_cp.parent = dt
+                new_cp.parenttype = "DocType"
+                new_cp.parentfield = "permissions"
+                new_cp.insert(ignore_permissions=True)
+                existing_roles.add(sp["role"])
+
+        # Add Executive Director (Read Only)
+        if role_name not in existing_roles:
+            cp = frappe.new_doc("Custom DocPerm")
+            cp.parent = dt
+            cp.parenttype = "DocType"
+            cp.parentfield = "permissions"
+            cp.role = role_name
+            cp.permlevel = 0
+            cp.read = 1
+            cp.write = 0
+            cp.create = 0
+            cp.delete = 0
+            cp.submit = 0
+            cp.cancel = 0
+            cp.amend = 0
+            cp.report = 1
+            cp.export = 1
+            cp.print = 1
+            cp.email = 1
+            cp.insert(ignore_permissions=True)
     frappe.db.commit()
 
     # User: director@elsaidy.org
@@ -335,7 +904,6 @@ def sync_executive_manager_portal():
         user.append("roles", {"role": role_name})
         user.append("roles", {"role": "Insights User"})
         user.insert(ignore_permissions=True)
-        # Set a secure random initial password
         user_doc = frappe.get_doc("User", user_email)
         user_doc.new_password = frappe.generate_hash(length=16)
         user_doc.save(ignore_permissions=True)
@@ -353,6 +921,18 @@ def sync_executive_manager_portal():
         u.save(ignore_permissions=True)
         frappe.db.commit()
         print(f" -> Verified User: {user_email}")
+
+    # Add to Insights Admin Team so director@elsaidy.org has direct execution access on tables
+    for u_target in ["director@elsaidy.org", "alyahmedelseidy@gmail.com"]:
+        if not frappe.db.exists("Insights Team Member", {"parent": "Admin", "user": u_target}):
+            tm = frappe.new_doc("Insights Team Member")
+            tm.parent = "Admin"
+            tm.parenttype = "Insights Team"
+            tm.parentfield = "team_members"
+            tm.user = u_target
+            tm.insert(ignore_permissions=True)
+            print(f" -> Added {u_target} to Insights Admin Team")
+    frappe.db.commit()
 
 
 def sync_knowledge_base_wiki():
@@ -376,7 +956,6 @@ def sync_knowledge_base_wiki():
 
     root_group = "atrt4uhbg7"
 
-    # Clean old documents that carried previous institution names
     old_doc_name = "kbt6idbd58"
     if frappe.db.exists("Wiki Document", old_doc_name):
         old_doc = frappe.get_doc("Wiki Document", old_doc_name)
@@ -389,7 +968,6 @@ def sync_knowledge_base_wiki():
         old_doc.save(ignore_permissions=True)
         frappe.db.commit()
 
-    # The 7 Official Chapters
     chapters = [
         {
             "slug": "company-policies",
@@ -493,7 +1071,6 @@ def sync_knowledge_base_wiki():
             doc.wiki_space = space_name
             doc.parent_wiki_document = root_group
             doc.save(ignore_permissions=True)
-            print(f" -> Updated Chapter: {chap['title']}")
         else:
             doc = frappe.new_doc("Wiki Document")
             doc.title = chap["title"]
@@ -505,25 +1082,103 @@ def sync_knowledge_base_wiki():
             doc.wiki_space = space_name
             doc.parent_wiki_document = root_group
             doc.insert(ignore_permissions=True)
-            print(f" -> Created Chapter: {chap['title']}")
 
     frappe.db.commit()
 
 
 def sync_onboarding_and_workspace_cleanup():
     """
-    Eliminates all 'Getting Started' popups/onboarding steps,
-    polishes workspace titles, and restricts Builder icon to System Managers.
+    Eliminates all 'Getting Started' popups/onboarding steps across Frappe, CRM, and Helpdesk.
+    Updates HD Settings and FCRM Settings to mark setup permanently completed.
+    Synchronizes Arabic translations in tabTranslation.
+    Polishes workspace titles and Desktop icons.
     """
     print("\n[Finalization] 6. Eliminating 'Getting Started' & Polishing Workspaces...")
 
-    # Dismiss all Module Onboarding and Onboarding Steps
+    # 1. Dismiss standard Frappe Module Onboarding & Steps
     frappe.db.sql("UPDATE `tabModule Onboarding` SET is_complete = 1")
     frappe.db.sql("UPDATE `tabOnboarding Step` SET is_complete = 1")
     frappe.db.commit()
-    print(" -> Completed all Module Onboarding & Steps (Getting Started fully dismissed).")
 
-    # Workspace Title Polishing
+    # 2. HD Settings Onboarding Completion
+    if frappe.db.exists("DocType", "HD Settings"):
+        frappe.db.set_single_value("HD Settings", "persona_captured", 1)
+        frappe.db.set_single_value("HD Settings", "setup_complete", 1)
+        frappe.db.set_single_value("HD Settings", "initial_helpdesk_name_setup_skipped", 1)
+        frappe.db.set_single_value("HD Settings", "brand_name", "Elsaidy Support - ركن سبل الأفق")
+        frappe.db.commit()
+        print(" -> HD Settings marked permanently completed.")
+
+    # 3. FCRM Settings Setup Completion
+    if frappe.db.exists("DocType", "FCRM Settings"):
+        frappe.db.set_single_value("FCRM Settings", "setup_completed", 1)
+        frappe.db.commit()
+        print(" -> FCRM Settings marked permanently completed.")
+
+    # 4. Update onboarding_status on all active users so no drawer ever re-opens
+    full_onboarding = {
+        "helpdesk_onboarding_status": [
+            {"name": "setup_email_account", "completed": True},
+            {"name": "invite_agents", "completed": True},
+            {"name": "setup_sla", "completed": True},
+            {"name": "create_first_ticket", "completed": True},
+            {"name": "assign_to_agent", "completed": True},
+            {"name": "reply_on_ticket", "completed": True},
+            {"name": "comment_on_ticket", "completed": True},
+            {"name": "first_article", "completed": True},
+            {"name": "add_invite_contact", "completed": True},
+            {"name": "explore_customer_portal", "completed": True}
+        ],
+        "frappecrm_onboarding_status": [
+            {"name": "setup_your_password", "completed": True},
+            {"name": "create_first_lead", "completed": True},
+            {"name": "invite_your_team", "completed": True},
+            {"name": "convert_lead_to_deal", "completed": True},
+            {"name": "create_first_task", "completed": True},
+            {"name": "create_first_note", "completed": True},
+            {"name": "add_first_comment", "completed": True},
+            {"name": "send_first_email", "completed": True},
+            {"name": "change_deal_status", "completed": True}
+        ]
+    }
+    for u in frappe.get_all("User", filters={"enabled": 1}, pluck="name"):
+        frappe.db.set_value("User", u, "onboarding_status", json.dumps(full_onboarding), update_modified=False)
+    frappe.db.commit()
+    print(" -> User onboarding_status updated on all active users.")
+
+    # 5. Sync Key Arabic Translations in tabTranslation
+    translations = [
+        ("Deals", "الصفقات"),
+        ("Organizations", "الشركات"),
+        ("Call Logs", "سجل المكالمات"),
+        ("Tasks", "المهام"),
+        ("Notes", "الملاحظات"),
+        ("No leads yet", "لا يوجد عملاء محتملون بعد"),
+        ("Avg. First Response", "متوسط أول رد"),
+        ("Avg. Resolution", "متوسط وقت الحل"),
+        ("Total Tickets", "إجمالي التذاكر"),
+        ("Resolved Tickets", "التذاكر المحلولة"),
+        ("Open Tickets", "التذاكر المفتوحة"),
+        ("First response SLA", "اتفاقية مستوى أول رد"),
+        ("Resolution SLA", "اتفاقية مستوى الحل"),
+        ("Create your first lead", "إنشاء أول عميل محتمل"),
+        ("Set up your company profile", "إعداد ملف الشركة"),
+        ("Welcome to Frappe Helpdesk", "مرحباً بك في خدمة العملاء"),
+    ]
+    for src, trans in translations:
+        existing_tr = frappe.db.get_value("Translation", {"language": "ar", "source_text": src}, "name")
+        if existing_tr:
+            frappe.db.set_value("Translation", existing_tr, "translated_text", trans)
+        else:
+            t_doc = frappe.new_doc("Translation")
+            t_doc.language = "ar"
+            t_doc.source_text = src
+            t_doc.translated_text = trans
+            t_doc.insert(ignore_permissions=True)
+    frappe.db.commit()
+    print(" -> Arabic translations synchronized in tabTranslation.")
+
+    # 6. Workspace Title Polishing
     ws_updates = {
         "Frappe CRM": {"title": "إدارة علاقات العملاء (CRM)", "is_hidden": 0},
         "Frappe Builder": {"title": "بناء وتصميم المواقع", "is_hidden": 1},
@@ -534,9 +1189,8 @@ def sync_onboarding_and_workspace_cleanup():
         if frappe.db.exists("Workspace", ws_name):
             frappe.db.set_value("Workspace", ws_name, vals)
     frappe.db.commit()
-    print(" -> Workspaces refined: CRM titled Arabic, Builder hidden from non-specialists, ZATCA active.")
 
-    # Desktop Icon for ZATCA
+    # 7. Desktop Icon for ZATCA
     if not frappe.db.exists("Desktop Icon", "ZATCA"):
         try:
             di = frappe.new_doc("Desktop Icon")

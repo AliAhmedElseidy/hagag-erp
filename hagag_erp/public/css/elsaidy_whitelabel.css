@@ -25,7 +25,7 @@
     pointer-events: none !important;
 }
 
-/* 2. Hide Any Residual Vendor Links (Frappe, ERPNext, Hagag) */
+/* 2. Hide Any Residual Vendor Links (Frappe, ERPNext, Hagag) & Unwanted Support/About */
 a[href*="frappe.io"],
 a[href*="erpnext.com"],
 a[href*="frappecloud.com"],
@@ -33,7 +33,12 @@ a[href*="hagagco.com"],
 .footer-powered,
 .powered-by-frappe,
 .frappe-badge,
-.erpnext-badge {
+.erpnext-badge,
+.dropdown-menu a[href*="frappe.io/support"],
+.dropdown-menu a[onclick*="show_about"],
+.dropdown-menu [data-label="About"],
+.dropdown-menu [data-label="Frappe Support"],
+.dropdown-menu [data-label="Documentation"] {
     display: none !important;
 }
 

@@ -2937,6 +2937,11 @@ def extend_bootinfo(bootinfo):
         elif name == "frappe":
             app["app_title"] = "النظام الأساسي" if lang == "ar" else "Core"
             app["title"] = app["app_title"]
+        elif name == "ksa_compliance":
+            app["app_title"] = "الفوترة الإلكترونية (ZATCA)" if lang == "ar" else "ZATCA"
+            app["title"] = app["app_title"]
+            app["app_logo_url"] = "/assets/hagag_erp/images/zatca-icon.svg"
+            app["logo"] = "/assets/hagag_erp/images/zatca-icon.svg"
 
     # Restrict Builder from non-System Managers
     if "System Manager" not in user_roles and "app_data" in bootinfo:

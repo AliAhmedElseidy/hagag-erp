@@ -80,6 +80,29 @@
         });
     }
 
+    // Dismiss unwanted support & about links from user dropdown
+    function purgeUnwantedUserMenuItems() {
+        var items = document.querySelectorAll('.dropdown-menu a, .dropdown-menu button, .dropdown-menu .dropdown-item, #toolbar-user .dropdown-item, .standard-actions .dropdown-item');
+        items.forEach(function (el) {
+            var text = (el.textContent || '').trim();
+            var href = el.getAttribute('href') || '';
+            var onclick = el.getAttribute('onclick') || '';
+            if (
+                text === 'Frappe Support' ||
+                text === 'دعم Frappe' ||
+                text === 'About' ||
+                text === 'حول' ||
+                text === 'Documentation' ||
+                text === 'التوثيق' ||
+                href.indexOf('frappe.io/support') !== -1 ||
+                onclick.indexOf('show_about') !== -1
+            ) {
+                var parentLi = el.closest('li') || el;
+                parentLi.style.setProperty('display', 'none', 'important');
+            }
+        });
+    }
+
     // 3. Desktop App Launcher Layout & Label Polishing
     function fixDesktopLauncher() {
         // Inject override CSS once into head
@@ -208,6 +231,7 @@
         sweepTimeout = setTimeout(function () {
             dismissOnboarding();
             purgeOnboardingDOM();
+            purgeUnwantedUserMenuItems();
             sanitizeDocumentTitle();
             monitorDesktop();
         }, 100);
@@ -223,7 +247,11 @@
 
     if (window.$ && $(document).on) {
         $(document).on('desktop_screen', monitorDesktop);
+        $(document).on('shown.bs.dropdown', purgeUnwantedUserMenuItems);
     }
+    document.addEventListener('click', function () {
+        setTimeout(purgeUnwantedUserMenuItems, 10);
+    });
 
     // Observe body for modals and dynamic desktop container mounting
     var modalObserver = new MutationObserver(function (mutations) {
